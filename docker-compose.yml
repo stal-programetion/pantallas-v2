@@ -1,0 +1,9 @@
+services:
+  pantallas:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pantallas-v2
+    ports:
+      - "${PORT:-8080}:80"
+    restart: unless-stopped

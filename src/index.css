@@ -1,0 +1,151 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Paleta de marca Surtigas (tomada del logo oficial)
+   - Azul acero  #2D79AD  → texto "Surtigas"
+   - Cian        #3DB4E6  → punta de la llama
+   - Índigo      #2E3D82  → base de la llama
+   - Verde hoja  #8BBF3F  → hoja
+   - Verde azul  #2E8886  → transición llama/hoja
+   Se redefinen las escalas `blue` y `orange` de Tailwind para que TODO el
+   proyecto adopte la marca sin tocar cada pantalla:
+   blue   → azul de marca (de 50 a 950, el 900 es el índigo del logo)
+   orange → verde hoja (acento de marca). Los avisos naranjas con significado
+            ("falta gente") usan hex explícito y no cambian.
+   ============================================================ */
+@theme {
+  --color-blue-50:  #eef6fb;
+  --color-blue-100: #d9ebf6;
+  --color-blue-200: #b5d8ee;
+  --color-blue-300: #86bfe2;
+  --color-blue-400: #4fa0d1;
+  --color-blue-500: #3a8bc0;
+  --color-blue-600: #2d79ad;
+  --color-blue-700: #1f6496;
+  --color-blue-800: #26428a;
+  --color-blue-900: #1f2b6b;
+  --color-blue-950: #161f52;
+
+  --color-orange-50:  #f5faea;
+  --color-orange-100: #e7f3cf;
+  --color-orange-200: #cfe8a3;
+  --color-orange-300: #b4d974;
+  --color-orange-400: #9ccb4f;
+  --color-orange-500: #8bbf3f;
+  --color-orange-600: #5f8c22;
+  --color-orange-700: #4b711a;
+  --color-orange-800: #3b5816;
+  --color-orange-900: #2e4513;
+
+  --color-brand-cyan: #3db4e6;
+  --color-brand-indigo: #1f2b6b;
+  --color-brand-teal: #2e8886;
+  --color-brand-leaf: #8bbf3f;
+}
+
+@layer base {
+  :root {
+    /* Paleta corporativa Surtigas */
+    --surtigas-indigo: #1f2b6b;
+    --surtigas-blue: #2d79ad;
+    --surtigas-cyan: #3db4e6;
+    --surtigas-teal: #2e8886;
+    --surtigas-leaf: #8bbf3f;
+
+    /* Semáforos accesibles */
+    --traffic-green: #10b981;
+    --traffic-yellow: #f59e0b;
+    --traffic-red: #ef4444;
+  }
+
+  body {
+    background-color: #f3f6fa;
+    color: #0f172a;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+  }
+
+  button:not(:disabled),
+  [role='button'] {
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid #2d79ad;
+    outline-offset: 2px;
+    border-radius: 6px;
+  }
+}
+
+/* ---------- Utilidades de marca ---------- */
+.surtigas-gradient {
+  background: linear-gradient(135deg, #1f2b6b 0%, #2d79ad 100%);
+}
+
+.surtigas-gradient-orange {
+  background: linear-gradient(135deg, #5f8c22 0%, #8bbf3f 100%);
+}
+
+.glass-panel {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ---------- Animaciones (microinteracciones) ---------- */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slide-in-right {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slide-in-up {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes pop-in {
+  from { transform: scale(0.96) translateY(-4px); opacity: 0; }
+  to { transform: scale(1) translateY(0); opacity: 1; }
+}
+@keyframes soft-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45); }
+  50% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+}
+
+.anim-fade { animation: fade-in 160ms ease-out backwards; }
+.anim-slide-right { animation: slide-in-right 220ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+.anim-up { animation: slide-in-up 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+.anim-pop { animation: pop-in 140ms ease-out backwards; }
+.anim-soft-pulse { animation: soft-pulse 2s ease-in-out infinite; }
+
+/* Entrada escalonada para tarjetas */
+.stagger > * { animation: slide-in-up 320ms cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+.stagger > *:nth-child(1) { animation-delay: 0ms; }
+.stagger > *:nth-child(2) { animation-delay: 40ms; }
+.stagger > *:nth-child(3) { animation-delay: 80ms; }
+.stagger > *:nth-child(4) { animation-delay: 120ms; }
+.stagger > *:nth-child(5) { animation-delay: 160ms; }
+.stagger > *:nth-child(6) { animation-delay: 200ms; }
+.stagger > *:nth-child(n+7) { animation-delay: 240ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- Scrollbar discreta ---------- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; background-clip: content-box; border: 2px solid transparent; }
+
+/* Celdas de la malla de turnos */
+.cell-malla { transition: transform 120ms ease, box-shadow 120ms ease; }
+.cell-malla:hover { transform: scale(1.06); box-shadow: 0 2px 6px rgba(15, 23, 42, 0.25); }
