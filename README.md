@@ -33,38 +33,4 @@ Sistema web integral para la optimización, simulación, análisis de demanda y 
 
 ---
 
-## 🛠️ Instalación y Ejecución Local
 
-1. **Instalar dependencias:**
-   ```bash
-   npm install
-   ```
-
-2. **Ejecutar en modo de desarrollo:**
-   ```bash
-   npm run dev
-   ```
-
-3. **Construir para producción:**
-   ```bash
-   npm run build
-   ```
-
-4. **Previsualizar la compilación de producción:**
-   ```bash
-   npm run preview
-   ```
-
----
-
-## ☁️ Despliegue en Vercel
-
-Este repositorio está preconfigurado para desplegarse automáticamente en [Vercel](https://vercel.com):
-
-1. Conecta tu cuenta de GitHub en Vercel.
-2. Importa el repositorio `pantallas-v2`.
-3. Vercel detectará automáticamente la configuración a través de `vercel.json`:
-   - **Framework Preset**: `Vite`
-   - **Build Command**: `npm run build`
-   - **Output Directory**: `dist`
-4. Haz clic en **Deploy**. Todas las rutas de `react-router-dom` funcionarán sin problemas de recarga gracias a las reglas de rewrite en `vercel.json`.
