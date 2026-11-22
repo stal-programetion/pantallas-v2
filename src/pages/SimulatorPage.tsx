@@ -2,15 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sliders,
-  TrendingUp,
-  Clock,
-  CheckCircle2,
-  AlertTriangle,
   Sparkles,
-  Users,
   RotateCcw,
-  ArrowRight,
-  ShieldAlert,
 } from 'lucide-react';
 import {
   ResponsiveContainer,

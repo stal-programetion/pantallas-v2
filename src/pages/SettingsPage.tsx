@@ -1,29 +1,27 @@
 import React, { useState } from 'react';
 import {
-  Settings,
   Database,
   Building2,
   Users,
   Shield,
-  Activity,
   CheckCircle2,
   AlertCircle,
-  Wifi,
-  WifiOff,
   RefreshCw,
-  Plus,
   Edit2,
   Save,
-  Flame,
+  RotateCcw,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { digiturnoService, DigiturnoConnectionStatus } from '../services';
-import { Office, Staff } from '../types';
+import { Office } from '../types';
 import { Modal } from '../components/common/Modal';
+import { REGLAS_POR_DEFECTO, LIMITES_REGLAS } from '../engine/reglas';
 
 export const SettingsPage: React.FC = () => {
-  const { offices, staff, sourceMode, setSourceMode, showToast } = useAppStore();
+  const { offices, staff, sourceMode, setSourceMode, showToast, resetDemoData, reglas, updateReglas, isLoading } =
+    useAppStore();
+  const [confirmReset, setConfirmReset] = useState(false);
   const { canEditSettings } = useAuthStore();
 
   const [activeTab, setActiveTab] = useState<'digiturno' | 'oficinas' | 'colaboradores' | 'reglas'>('digiturno');
@@ -33,10 +31,36 @@ export const SettingsPage: React.FC = () => {
   const [connectionStatus, setConnectionStatus] = useState<DigiturnoConnectionStatus | null>(null);
 
   // SLA and rule parameters
-  const [targetSla, setTargetSla] = useState(80);
-  const [maxWaitMin, setMaxWaitMin] = useState(10);
-  const [maxPresencialKm, setMaxPresencialKm] = useState(45);
-  const [lunchDuration, setLunchDuration] = useState(60);
+  // Reglas laborales: se editan aquí y se aplican al motor al guardar
+  const [targetSla, setTargetSla] = useState(Math.round(reglas.slaObjetivo * 100));
+  const [maxWaitMin, setMaxWaitMin] = useState(reglas.tiempoEsperaMaxMin);
+  const [maxPresencialKm, setMaxPresencialKm] = useState(reglas.distanciaMaxPresencialKm);
+  const [lunchDuration, setLunchDuration] = useState(reglas.duracionAlmuerzoMin);
+
+  const reglasEditadas = {
+    slaObjetivo: targetSla / 100,
+    tiempoEsperaMaxMin: maxWaitMin,
+    distanciaMaxPresencialKm: maxPresencialKm,
+    duracionAlmuerzoMin: lunchDuration,
+  };
+  const hayCambiosReglas = JSON.stringify(reglasEditadas) !== JSON.stringify(reglas);
+
+  const guardarReglas = async () => {
+    await updateReglas(reglasEditadas);
+    // Reflejar los valores normalizados (p. ej. si se escribió algo fuera de rango)
+    const r = useAppStore.getState().reglas;
+    setTargetSla(Math.round(r.slaObjetivo * 100));
+    setMaxWaitMin(r.tiempoEsperaMaxMin);
+    setMaxPresencialKm(r.distanciaMaxPresencialKm);
+    setLunchDuration(r.duracionAlmuerzoMin);
+  };
+
+  const valoresPorDefecto = () => {
+    setTargetSla(Math.round(REGLAS_POR_DEFECTO.slaObjetivo * 100));
+    setMaxWaitMin(REGLAS_POR_DEFECTO.tiempoEsperaMaxMin);
+    setMaxPresencialKm(REGLAS_POR_DEFECTO.distanciaMaxPresencialKm);
+    setLunchDuration(REGLAS_POR_DEFECTO.duracionAlmuerzoMin);
+  };
 
   // Edit Office Modal
   const [editingOffice, setEditingOffice] = useState<Office | null>(null);
@@ -245,6 +269,41 @@ export const SettingsPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Datos de demostración guardados en este navegador */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+            <div>
+              <div className="font-bold text-slate-900 text-xs">Datos de demostración</div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Los cambios en la malla, aprobaciones, ausencias y traslados se guardan en este navegador.
+                Restablecer los devuelve a los datos iniciales (la sesión se mantiene).
+              </p>
+            </div>
+            {confirmReset ? (
+              <div className="flex gap-2 shrink-0">
+                <button
+                  onClick={() => setConfirmReset(false)}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:bg-slate-100"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={resetDemoData}
+                  className="px-3 py-2 rounded-lg text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700"
+                >
+                  Sí, restablecer
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmReset(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 shrink-0"
+              >
+                <RotateCcw size={14} />
+                Restablecer datos
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -369,7 +428,8 @@ export const SettingsPage: React.FC = () => {
               Reglas Laborales y Parámetros del Motor de Optimización
             </h3>
             <p className="text-xs text-slate-500">
-              Ajusta los umbrales utilizados por Erlang C para generar las mallas y alertas.
+              Ajusta los umbrales utilizados por Erlang C para generar las mallas y alertas. Al guardar, el motor
+              recalcula la malla, las alertas y los traslados del día seleccionado.
             </p>
           </div>
 
@@ -381,8 +441,9 @@ export const SettingsPage: React.FC = () => {
               <div className="flex items-center gap-3">
                 <input
                   type="number"
-                  min="60"
-                  max="99"
+                  min={LIMITES_REGLAS.slaPct.min}
+                  max={LIMITES_REGLAS.slaPct.max}
+                  disabled={!canEditSettings()}
                   value={targetSla}
                   onChange={(e) => setTargetSla(Number(e.target.value))}
                   className="w-24 bg-white border border-slate-300 rounded-lg p-2 font-bold text-slate-900"
@@ -398,8 +459,9 @@ export const SettingsPage: React.FC = () => {
               <div className="flex items-center gap-3">
                 <input
                   type="number"
-                  min="5"
-                  max="30"
+                  min={LIMITES_REGLAS.tiempoEsperaMaxMin.min}
+                  max={LIMITES_REGLAS.tiempoEsperaMaxMin.max}
+                  disabled={!canEditSettings()}
                   value={maxWaitMin}
                   onChange={(e) => setMaxWaitMin(Number(e.target.value))}
                   className="w-24 bg-white border border-slate-300 rounded-lg p-2 font-bold text-slate-900"
@@ -415,8 +477,9 @@ export const SettingsPage: React.FC = () => {
               <div className="flex items-center gap-3">
                 <input
                   type="number"
-                  min="10"
-                  max="100"
+                  min={LIMITES_REGLAS.distanciaMaxPresencialKm.min}
+                  max={LIMITES_REGLAS.distanciaMaxPresencialKm.max}
+                  disabled={!canEditSettings()}
                   value={maxPresencialKm}
                   onChange={(e) => setMaxPresencialKm(Number(e.target.value))}
                   className="w-24 bg-white border border-slate-300 rounded-lg p-2 font-bold text-slate-900"
@@ -432,25 +495,43 @@ export const SettingsPage: React.FC = () => {
               <div className="flex items-center gap-3">
                 <input
                   type="number"
-                  min="30"
-                  max="90"
-                  step="30"
+                  min={LIMITES_REGLAS.duracionAlmuerzoMin.min}
+                  max={LIMITES_REGLAS.duracionAlmuerzoMin.max}
+                  step={LIMITES_REGLAS.duracionAlmuerzoMin.paso}
+                  disabled={!canEditSettings()}
                   value={lunchDuration}
                   onChange={(e) => setLunchDuration(Number(e.target.value))}
                   className="w-24 bg-white border border-slate-300 rounded-lg p-2 font-bold text-slate-900"
                 />
-                <span className="text-slate-500">minutos (2 franjas de 30 min)</span>
+                <span className="text-slate-500">
+                  minutos ({Math.max(1, Math.round(lunchDuration / 30))} franja{Math.round(lunchDuration / 30) === 1 ? '' : 's'} de 30 min)
+                </span>
               </div>
             </div>
           </div>
 
-          <div className="flex justify-end pt-3">
+          {hayCambiosReglas && canEditSettings() && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Hay cambios sin guardar. Al aplicarlos se genera una nueva propuesta de malla para el día seleccionado y se
+              pierden los ajustes manuales que tenga.
+            </p>
+          )}
+
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-3">
             <button
-              onClick={() => showToast('Parámetros guardados correctamente', 'success')}
-              className="px-5 py-2.5 bg-blue-800 hover:bg-blue-900 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center gap-2"
+              onClick={valoresPorDefecto}
+              disabled={!canEditSettings()}
+              className="px-4 py-2.5 rounded-xl text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Valores por defecto
+            </button>
+            <button
+              onClick={guardarReglas}
+              disabled={!canEditSettings() || !hayCambiosReglas || isLoading}
+              className="px-5 py-2.5 bg-blue-800 hover:bg-blue-900 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <Save size={15} />
-              <span>Guardar Reglas Laborales</span>
+              <span>{isLoading ? 'Recalculando…' : 'Guardar y aplicar al motor'}</span>
             </button>
           </div>
         </div>

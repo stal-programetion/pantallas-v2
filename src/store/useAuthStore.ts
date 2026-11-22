@@ -1,8 +1,13 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { STORAGE_KEYS } from '../services/mock/storage';
 import type { User, UserRole } from '../types';
 
 interface AuthState {
   currentUser: User;
+  isAuthenticated: boolean;
+  login: (role: UserRole) => void;
+  logout: () => void;
   setRole: (role: UserRole) => void;
   canViewHealthData: () => boolean;
   canApprovePlan: () => boolean;
@@ -34,30 +39,51 @@ const ROLES_DATA: Record<UserRole, User> = {
   },
 };
 
-export const useAuthStore = create<AuthState>((set, get) => ({
-  currentUser: ROLES_DATA.COORDINADOR, // Rol operativo por defecto
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      currentUser: ROLES_DATA.COORDINADOR, // Rol operativo por defecto
+      isAuthenticated: false,
 
-  setRole: (role: UserRole) => {
-    set({ currentUser: ROLES_DATA[role] });
-  },
+      login: (role: UserRole) => {
+        set({ currentUser: ROLES_DATA[role], isAuthenticated: true });
+      },
 
-  canViewHealthData: () => {
-    const role = get().currentUser.rol;
-    return role === 'ADMIN' || role === 'COORDINADOR';
-  },
+      logout: () => {
+        set({ isAuthenticated: false });
+      },
 
-  canApprovePlan: () => {
-    const role = get().currentUser.rol;
-    return role === 'ADMIN' || role === 'COORDINADOR';
-  },
+      setRole: (role: UserRole) => {
+        set({ currentUser: ROLES_DATA[role] });
+      },
 
-  canEditSettings: () => {
-    const role = get().currentUser.rol;
-    return role === 'ADMIN';
-  },
+      canViewHealthData: () => {
+        const role = get().currentUser.rol;
+        return role === 'ADMIN' || role === 'COORDINADOR';
+      },
 
-  canEditShifts: () => {
-    const role = get().currentUser.rol;
-    return role === 'ADMIN' || role === 'COORDINADOR';
-  },
-}));
+      canApprovePlan: () => {
+        const role = get().currentUser.rol;
+        return role === 'ADMIN' || role === 'COORDINADOR';
+      },
+
+      canEditSettings: () => {
+        const role = get().currentUser.rol;
+        return role === 'ADMIN';
+      },
+
+      canEditShifts: () => {
+        const role = get().currentUser.rol;
+        return role === 'ADMIN' || role === 'COORDINADOR';
+      },
+    }),
+    {
+      name: STORAGE_KEYS.auth,
+      version: 1,
+      partialize: (state) => ({
+        currentUser: state.currentUser,
+        isAuthenticated: state.isAuthenticated,
+      }),
+    }
+  )
+);

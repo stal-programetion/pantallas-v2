@@ -104,7 +104,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ open, onClose }) => {
         <div className="p-4 pb-2 flex items-start gap-3">
           <NavLink
             to="/dashboard"
-            className="flex-1 flex items-center justify-center rounded-2xl bg-white px-4 py-3"
+            className="logo-claro flex-1 flex items-center justify-center rounded-2xl bg-white px-4 py-3"
             aria-label="Ir al centro de control"
           >
             <SurtigasLogo size="md" variant="full" />

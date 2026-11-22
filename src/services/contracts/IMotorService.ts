@@ -7,6 +7,12 @@ import type {
   Absence,
 } from '../../types';
 
+/** Reglas laborales que el motor aplica al generar planes y recomendaciones. */
+export interface OpcionesMotor {
+  duracionAlmuerzoMin?: number;
+  distanciaMaxPresencialKm?: number;
+}
+
 export interface SimulationParams {
   additionalAbsences: number;
   demandMultiplier: number; // 0.8 to 1.5
@@ -42,7 +48,8 @@ export interface IMotorService {
     staff: Staff[],
     absences: Absence[],
     dayOfWeek?: number,
-    isFortnight?: boolean
+    isFortnight?: boolean,
+    opciones?: OpcionesMotor
   ): Promise<DayPlan>;
 
   getRedistributions(
@@ -51,7 +58,8 @@ export interface IMotorService {
     plan: DayPlan,
     franja?: string,
     dayOfWeek?: number,
-    isFortnight?: boolean
+    isFortnight?: boolean,
+    opciones?: OpcionesMotor
   ): Promise<RedistributionRecommendation[]>;
 
   evaluateAlerts(
@@ -59,7 +67,9 @@ export interface IMotorService {
     staff: Staff[],
     absences: Absence[],
     plan: DayPlan,
-    currentSlot?: string
+    currentSlot?: string,
+    dayOfWeek?: number,
+    isFortnight?: boolean
   ): Promise<Alert[]>;
 
   runSimulation(

@@ -116,6 +116,13 @@ export interface DayPlan {
   tiempoAhorradoMinutos: number; // vs 90 min en Excel manual
   turnos: Record<string, ColaboradorShift>; // key: colaboradorId
   justificaciones: DayPlanJustification[];
+  /** Reglas laborales con las que el motor generó la propuesta */
+  reglasAplicadas?: {
+    slaObjetivo: number;
+    tiempoEsperaMaxMin: number;
+    distanciaMaxPresencialKm: number;
+    duracionAlmuerzoMin: number;
+  };
 }
 
 export interface HistoricalTicketSummary {

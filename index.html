@@ -9,6 +9,17 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      // Aplica el tema antes de pintar la página para evitar un destello claro
+      (function () {
+        try {
+          var raw = localStorage.getItem('surtigas-pantallas:v1:tema');
+          var pref = raw ? JSON.parse(raw).state.preferencia : 'sistema';
+          var oscuro = pref === 'oscuro' || (pref === 'sistema' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (oscuro) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body class="bg-slate-50 text-slate-800 antialiased selection:bg-orange-500 selection:text-white">
     <div id="root"></div>

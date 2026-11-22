@@ -118,7 +118,6 @@ export const DashboardPage: React.FC = () => {
     });
   }, [offices, metricsById, status, dept, query, sort]);
 
-  const filtersActive = status !== 'todos' || dept !== 'todos' || query !== '';
   const clearFilters = () => {
     setStatus('todos');
     setDept('todos');

@@ -1,21 +1,14 @@
 import React, { useState } from 'react';
 import {
-  FileSpreadsheet,
   Download,
-  Calendar,
   CheckCircle2,
   Clock,
-  TrendingDown,
-  TrendingUp,
-  Award,
   Zap,
-  Building2,
   Users,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { KpiCard } from '../components/common/KpiCard';
 import { TrafficLight } from '../components/common/TrafficLight';
-import { TooltipWhy } from '../components/common/TooltipWhy';
 
 export const ReportsPage: React.FC = () => {
   const { offices, liveMetrics, showToast } = useAppStore();

@@ -1,19 +1,13 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Building2,
   Users,
-  Clock,
   Phone,
   MapPin,
-  CheckCircle2,
-  AlertTriangle,
   ArrowRight,
-  UserCheck,
   Send,
   UserPlus,
-  ShieldAlert,
-  Sparkles,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -28,7 +22,6 @@ import { useAppStore } from '../store/useAppStore';
 import { TrafficLight } from '../components/common/TrafficLight';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { OPERATING_SLOTS, predictArrivals } from '../engine/forecast';
-import { TooltipWhy } from '../components/common/TooltipWhy';
 
 export const OfficeDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -37,7 +30,6 @@ export const OfficeDetailPage: React.FC = () => {
     offices,
     staff,
     liveMetrics,
-    alerts,
     currentPlan,
     currentSlotTime,
     showToast,
@@ -46,8 +38,6 @@ export const OfficeDetailPage: React.FC = () => {
   const office = offices.find((o) => o.id === id) || offices[0];
   const metrics = liveMetrics.find((m) => m.oficinaId === office.id);
   const officeStaff = staff.filter((s) => s.oficinaBaseId === office.id);
-  const officeAlerts = alerts.filter((a) => a.oficinaId === office.id);
-
   // Pronóstico de las próximas 4 franjas horarias
   const currentSlotIndex = OPERATING_SLOTS.indexOf(currentSlotTime);
   const next4Slots = OPERATING_SLOTS.slice(

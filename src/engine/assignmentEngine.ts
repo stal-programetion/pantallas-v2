@@ -9,6 +9,24 @@ import type {
 } from '../types';
 import { OPERATING_SLOTS, predictArrivals } from './forecast';
 import { calculateRequiredAgents } from './erlangC';
+import { ausenciaAplica } from './calendar';
+
+export interface OpcionesAsignacion {
+  /** Duración del almuerzo en minutos (múltiplo de 30). Por defecto 60. */
+  duracionAlmuerzoMin?: number;
+}
+
+// Inicio de cada ventana de almuerzo, en el orden en que se reparten para escalonar
+const INICIOS_ALMUERZO = ['12:00', '13:00', '13:30', '12:30'];
+
+/** Ventanas de almuerzo de N franjas de 30 min a partir de cada inicio escalonado. */
+export function ventanasAlmuerzo(duracionMin: number): string[][] {
+  const franjas = Math.max(1, Math.round(duracionMin / 30));
+  return INICIOS_ALMUERZO.map((inicio) => {
+    const i = OPERATING_SLOTS.indexOf(inicio);
+    return OPERATING_SLOTS.slice(i, i + franjas);
+  });
+}
 
 /**
  * Motor de Asignación y Optimización de Malla de Turnos
@@ -20,15 +38,18 @@ export function generateDayPlan(
   staffList: Staff[],
   absences: Absence[],
   dayOfWeek: number = 1,
-  isFortnight: boolean = false
+  isFortnight: boolean = false,
+  opciones: OpcionesAsignacion = {}
 ): DayPlan {
+  const lunchWindows = ventanasAlmuerzo(opciones.duracionAlmuerzoMin ?? 60);
+  const horasJornada = (OPERATING_SLOTS.length - lunchWindows[0].length) * 0.5;
   const shifts: Record<string, ColaboradorShift> = {};
   const justificaciones: DayPlanJustification[] = [];
 
   // Mapeo rápido de colaboradores ausentes hoy
   const activeAbsencesByStaff = new Map<string, Absence>();
   absences.forEach((abs) => {
-    if (abs.estado === 'activa' || (date >= abs.fechaInicio && date <= abs.fechaFin)) {
+    if (ausenciaAplica(abs, date)) {
       activeAbsencesByStaff.set(abs.colaboradorId, abs);
     }
   });
@@ -92,15 +113,7 @@ export function generateDayPlan(
       }
     });
 
-    // Escalonamiento de almuerzos para colaboradores disponibles
-    // Ventanas posibles: 12:00-13:00 (slots 12:00, 12:30), 13:00-14:00 (slots 13:00, 13:30), 13:30-14:30
-    const lunchWindows = [
-      ['12:00', '12:30'],
-      ['13:00', '13:30'],
-      ['13:30', '14:00'],
-      ['12:30', '13:00'],
-    ];
-
+    // Escalonamiento de almuerzos: las ventanas (según la duración configurada) se reparten en rotación
     // Asignar horarios y almuerzos a cada colaborador disponible
     availableStaff.forEach((colab, index) => {
       const assignedLunchSlots = lunchWindows[index % lunchWindows.length];
@@ -126,7 +139,7 @@ export function generateDayPlan(
         colaboradorId: colab.id,
         oficinaBaseId: office.id,
         slots,
-        horasTotales: 7.5,
+        horasTotales: horasJornada,
       };
     });
 

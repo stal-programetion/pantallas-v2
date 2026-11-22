@@ -1,21 +1,14 @@
 import React, { useState } from 'react';
 import {
-  UserX,
   Plus,
-  ShieldCheck,
-  Calendar,
-  Clock,
   Trash2,
-  AlertTriangle,
-  Building2,
   Sparkles,
   Lock,
-  ArrowRight,
   CheckCircle2,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
-import { Absence, AbsenceType } from '../types';
+import { AbsenceType } from '../types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Modal } from '../components/common/Modal';
 import { TooltipWhy } from '../components/common/TooltipWhy';
@@ -27,10 +20,10 @@ export const AbsencesPage: React.FC = () => {
     offices,
     createAbsence,
     removeAbsence,
-    showToast,
+    selectedDate,
   } = useAppStore();
 
-  const { canViewHealthData, currentUser } = useAuthStore();
+  const { canViewHealthData } = useAuthStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [filterType, setFilterType] = useState<string>('todos');
@@ -38,8 +31,8 @@ export const AbsencesPage: React.FC = () => {
   // Form State
   const [selectedStaffId, setSelectedStaffId] = useState<string>('st-01');
   const [tipo, setTipo] = useState<AbsenceType>('incapacidad_general');
-  const [fechaInicio, setFechaInicio] = useState<string>('2026-10-15');
-  const [fechaFin, setFechaFin] = useState<string>('2026-10-17');
+  const [fechaInicio, setFechaInicio] = useState<string>(selectedDate);
+  const [fechaFin, setFechaFin] = useState<string>(selectedDate);
   const [diagnostico, setDiagnostico] = useState<string>('CIE-10 J00: Rinofaringitis aguda con incapacidad médica');
   const [motivoDetalle, setMotivoDetalle] = useState<string>('Reposo domiciliario expedido por médico tratante EPS.');
   const [aprobadoPor, setAprobadoPor] = useState<string>('Dr. Andrés Restrepo (Salud Ocupacional Surtigas)');
