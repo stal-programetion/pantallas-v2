@@ -9,19 +9,15 @@ import {
   CheckCircle2,
   Clock,
   ShieldCheck,
-  FileSpreadsheet,
   AlertCircle,
   ArrowRight,
   ArrowLeft,
-  Info,
   Check,
-  Calendar,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { TooltipWhy } from '../components/common/TooltipWhy';
 import { StatusBadge } from '../components/common/StatusBadge';
-import { TrafficLight } from '../components/common/TrafficLight';
 import { RecommendationCard } from '../components/redistribution/RecommendationCard';
 
 export const DayPlanPage: React.FC = () => {
@@ -117,7 +113,6 @@ export const DayPlanPage: React.FC = () => {
       <div className="bg-white p-3.5 rounded-xl border border-slate-200/90 shadow-2xs">
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
           {steps.map((s) => {
-            const Icon = s.icon;
             const isCurrent = currentStep === s.num;
             const isCompleted = s.num < currentStep || isApproved;
 
@@ -402,7 +397,7 @@ export const DayPlanPage: React.FC = () => {
                   Paso 4: Recomendaciones de Redistribución (Presencial y Virtual)
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Detección de déficit y superávit por cercanía geográfica. Acepta o rechaza las propuestas antes de oficializar el plan.
+                  Traslados que más reducen la espera total de los clientes, presenciales o virtuales. Acepta o rechaza las propuestas antes de oficializar el plan.
                 </p>
               </div>
 

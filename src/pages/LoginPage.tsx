@@ -1,22 +1,23 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   ShieldCheck,
   UserCheck,
   Eye,
   ArrowRight,
-  Sparkles,
   Lock,
-  Flame,
   Check,
 } from 'lucide-react';
 import { SurtigasLogo } from '../components/common/SurtigasLogo';
 import { useAuthStore } from '../store/useAuthStore';
-import { UserRole } from '../types';
+import type { UserRole } from '../types';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentUser, setRole } = useAuthStore();
+  const location = useLocation();
+  const { currentUser, login } = useAuthStore();
+  // Página a la que el usuario intentaba entrar antes de ser enviado al login
+  const destino = (location.state as { from?: string } | null)?.from ?? '/dashboard';
   const [selectedRole, setSelectedRole] = useState<UserRole>(currentUser.rol);
 
   const roles = [
@@ -71,8 +72,8 @@ export const LoginPage: React.FC = () => {
   ];
 
   const handleLogin = () => {
-    setRole(selectedRole);
-    navigate('/dashboard');
+    login(selectedRole);
+    navigate(destino, { replace: true });
   };
 
   return (
@@ -85,7 +86,7 @@ export const LoginPage: React.FC = () => {
         {/* Surtigas Header */}
         <div className="text-center space-y-2">
           <div className="flex justify-center mb-4">
-            <div className="rounded-3xl bg-white px-8 py-4 shadow-xl">
+            <div className="logo-claro rounded-3xl bg-white px-8 py-4 shadow-xl">
               <SurtigasLogo size="lg" />
             </div>
           </div>

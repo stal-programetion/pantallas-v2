@@ -1,20 +1,37 @@
-import type { ITurnosService } from '../contracts/ITurnosService';
+import type { ITurnosService, SaveDayPlanOptions } from '../contracts/ITurnosService';
 import type { DayPlan, ShiftSlot } from '../../types';
+import { loadJSON, saveJSON, STORAGE_KEYS } from './storage';
+
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 
 export class MockTurnosService implements ITurnosService {
-  private plans: Map<string, DayPlan> = new Map();
-  private originalProposals: Map<string, DayPlan> = new Map();
+  private plans: Map<string, DayPlan> = new Map(
+    Object.entries(loadJSON<Record<string, DayPlan>>(STORAGE_KEYS.planes, {}))
+  );
+  private originalProposals: Map<string, DayPlan> = new Map(
+    Object.entries(loadJSON<Record<string, DayPlan>>(STORAGE_KEYS.propuestas, {}))
+  );
 
-  async getDayPlan(date: string): Promise<DayPlan | null> {
-    return this.plans.get(date) || null;
+  private persist(): void {
+    saveJSON(STORAGE_KEYS.planes, Object.fromEntries(this.plans));
+    saveJSON(STORAGE_KEYS.propuestas, Object.fromEntries(this.originalProposals));
   }
 
-  async saveDayPlan(plan: DayPlan): Promise<DayPlan> {
-    if (!this.originalProposals.has(plan.fecha)) {
-      this.originalProposals.set(plan.fecha, JSON.parse(JSON.stringify(plan)));
+  async getDayPlan(date: string): Promise<DayPlan | null> {
+    const plan = this.plans.get(date);
+    return plan ? clone(plan) : null;
+  }
+
+  async saveDayPlan(plan: DayPlan, options: SaveDayPlanOptions = {}): Promise<DayPlan> {
+    const { esPropuesta = true } = options;
+    // Un plan recién generado por el motor pasa a ser la nueva propuesta original,
+    // así "Restaurar propuesta" vuelve a la última versión del motor (p. ej. tras cambiar a quincena).
+    if (esPropuesta || !this.originalProposals.has(plan.fecha)) {
+      this.originalProposals.set(plan.fecha, clone(plan));
     }
-    this.plans.set(plan.fecha, JSON.parse(JSON.stringify(plan)));
-    return plan;
+    this.plans.set(plan.fecha, clone(plan));
+    this.persist();
+    return clone(plan);
   }
 
   async approveDayPlan(date: string, approverName: string): Promise<DayPlan> {
@@ -37,7 +54,8 @@ export class MockTurnosService implements ITurnosService {
     };
 
     this.plans.set(date, plan);
-    return plan;
+    this.persist();
+    return clone(plan);
   }
 
   async updateSlot(
@@ -57,14 +75,16 @@ export class MockTurnosService implements ITurnosService {
       };
     }
 
-    return plan;
+    this.persist();
+    // Se devuelve una copia nueva para que React detecte el cambio y recalcule la cobertura.
+    return clone(plan);
   }
 
   async resetToProposal(date: string): Promise<DayPlan> {
     const original = this.originalProposals.get(date);
     if (!original) throw new Error(`Propuesta original para ${date} no encontrada`);
-    const restored = JSON.parse(JSON.stringify(original));
-    this.plans.set(date, restored);
-    return restored;
+    this.plans.set(date, clone(original));
+    this.persist();
+    return clone(original);
   }
 }

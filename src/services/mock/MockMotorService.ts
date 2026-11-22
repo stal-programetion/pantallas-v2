@@ -1,5 +1,6 @@
 import type {
   IMotorService,
+  OpcionesMotor,
   SimulationParams,
   SimulationResult,
 } from '../contracts/IMotorService';
@@ -24,9 +25,12 @@ export class MockMotorService implements IMotorService {
     staff: Staff[],
     absences: Absence[],
     dayOfWeek: number = 1,
-    isFortnight: boolean = false
+    isFortnight: boolean = false,
+    opciones: OpcionesMotor = {}
   ): Promise<DayPlan> {
-    return generateDayPlan(date, offices, staff, absences, dayOfWeek, isFortnight);
+    return generateDayPlan(date, offices, staff, absences, dayOfWeek, isFortnight, {
+      duracionAlmuerzoMin: opciones.duracionAlmuerzoMin,
+    });
   }
 
   async getRedistributions(
@@ -35,9 +39,18 @@ export class MockMotorService implements IMotorService {
     plan: DayPlan,
     franja: string = '11:00',
     dayOfWeek: number = 1,
-    isFortnight: boolean = false
+    isFortnight: boolean = false,
+    opciones: OpcionesMotor = {}
   ): Promise<RedistributionRecommendation[]> {
-    return generateRedistributionRecommendations(offices, staff, plan, franja, dayOfWeek, isFortnight);
+    return generateRedistributionRecommendations(
+      offices,
+      staff,
+      plan,
+      franja,
+      dayOfWeek,
+      isFortnight,
+      opciones.distanciaMaxPresencialKm
+    );
   }
 
   async evaluateAlerts(
@@ -45,9 +58,11 @@ export class MockMotorService implements IMotorService {
     staff: Staff[],
     absences: Absence[],
     plan: DayPlan,
-    currentSlot: string = '11:00'
+    currentSlot: string = '11:00',
+    dayOfWeek: number = 1,
+    isFortnight: boolean = false
   ): Promise<Alert[]> {
-    return evaluateSystemAlerts(offices, staff, absences, plan, currentSlot);
+    return evaluateSystemAlerts(offices, staff, absences, plan, currentSlot, dayOfWeek, isFortnight);
   }
 
   async runSimulation(

@@ -9,9 +9,13 @@ import {
   LogOut,
   ChevronDown,
   Check,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
+import { DateNavigator } from './DateNavigator';
 import { useAuthStore } from '../../store/useAuthStore';
+import { temaEfectivo, useThemeStore } from '../../store/useThemeStore';
 import { AlertDrawer } from '../alerts/AlertDrawer';
 import { SurtigasLogo } from '../common/SurtigasLogo';
 import { UserRole } from '../../types';
@@ -52,7 +56,9 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
     alerts,
     tickSimulation,
   } = useAppStore();
-  const { currentUser, setRole } = useAuthStore();
+  const { currentUser, setRole, logout } = useAuthStore();
+  const { preferencia, alternar: alternarTema } = useThemeStore();
+  const esOscuro = temaEfectivo(preferencia) === 'oscuro';
 
   const [isAlertDrawerOpen, setIsAlertDrawerOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -149,6 +155,10 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
           <Search size={19} />
         </button>
 
+        <div className="hidden sm:block">
+          <DateNavigator />
+        </div>
+
         <button
           onClick={() => toggleFortnight()}
           role="switch"
@@ -169,6 +179,15 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
               className={`block w-3 h-3 rounded-full bg-white transition-transform ${isFortnight ? 'translate-x-3' : ''}`}
             />
           </span>
+        </button>
+
+        <button
+          onClick={alternarTema}
+          aria-label={esOscuro ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+          title={esOscuro ? 'Modo claro' : 'Modo oscuro'}
+          className="p-2 rounded-xl text-slate-600 hover:bg-slate-100 transition-colors"
+        >
+          {esOscuro ? <Sun size={19} /> : <Moon size={19} />}
         </button>
 
         <button
@@ -235,12 +254,13 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
                 role="menuitem"
                 onClick={() => {
                   setUserMenuOpen(false);
-                  navigate('/login');
+                  logout();
+                  navigate('/login', { replace: true });
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-50"
               >
                 <LogOut size={15} className="text-slate-400" />
-                Cambiar de usuario
+                Cerrar sesión
               </button>
             </div>
           )}

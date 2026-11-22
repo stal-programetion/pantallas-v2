@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type {
   Office,
   Staff,
@@ -17,6 +18,17 @@ import {
 } from '../services';
 import { INITIAL_OFFICES } from '../mock/officesData';
 import { INITIAL_STAFF } from '../mock/staffData';
+import { clearDemoData, STORAGE_KEYS } from '../services/mock/storage';
+import { ajustarADiaHabil, ausenciasDelDia, diaSemana, esQuincena, formatoFechaLarga } from '../engine/calendar';
+import { aplicarReglas, normalizarReglas, REGLAS_POR_DEFECTO, type ReglasLaborales } from '../engine/reglas';
+
+type EstadoDecision = RedistributionRecommendation['estado'];
+
+const tieneCambiosManuales = (plan: DayPlan) =>
+  Object.values(plan.turnos).some((t) => Object.values(t.slots).some((s) => s.esModificadoManual));
+
+/** Fecha base del piloto: el histórico simulado y las ausencias iniciales giran alrededor de este día. */
+export const FECHA_BASE = '2026-10-15';
 
 interface AppState {
   // Datos principales
@@ -38,11 +50,18 @@ interface AppState {
   lastTickTimestamp: number;
   toastMessage: { text: string; type: 'success' | 'warning' | 'info' | 'error' } | null;
 
+  // Reglas laborales que alimentan al motor
+  reglas: ReglasLaborales;
+  // Decisiones sobre recomendaciones de traslado, por fecha: "YYYY-MM-DD|id" → estado
+  decisionesTraslado: Record<string, EstadoDecision>;
+
   // Acciones
   init: () => Promise<void>;
   tickSimulation: () => Promise<void>;
   toggleSimulation: (pause?: boolean) => void;
   toggleFortnight: () => Promise<void>;
+  setSelectedDate: (date: string) => Promise<void>;
+  updateReglas: (reglas: ReglasLaborales) => Promise<void>;
   setSourceMode: (mode: 'mock' | 'real') => void;
   clearToast: () => void;
   showToast: (text: string, type?: 'success' | 'warning' | 'info' | 'error') => void;
@@ -63,6 +82,9 @@ interface AppState {
   // Alertas
   dismissAlert: (id: string) => void;
 
+  // Datos de demostración
+  resetDemoData: () => void;
+
   // Métricas agregadas
   getGlobalKpis: () => {
     totalClientesEnFila: number;
@@ -74,383 +96,406 @@ interface AppState {
   };
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
-  offices: INITIAL_OFFICES,
-  staff: INITIAL_STAFF,
-  absences: [],
-  currentPlan: null,
-  alerts: [],
-  liveMetrics: [],
-  recommendations: [],
+export const useAppStore = create<AppState>()(
+  persist(
+    (set, get) => {
+      /** Parámetros del motor para la fecha seleccionada y las reglas vigentes. */
+      const contexto = () => {
+        const { selectedDate, absences, reglas, isFortnight } = get();
+        return {
+          fecha: selectedDate,
+          dia: diaSemana(selectedDate),
+          isFortnight,
+          ausenciasDia: ausenciasDelDia(absences, selectedDate),
+          opciones: {
+            duracionAlmuerzoMin: reglas.duracionAlmuerzoMin,
+            distanciaMaxPresencialKm: reglas.distanciaMaxPresencialKm,
+          },
+        };
+      };
 
-  selectedDate: '2026-10-15',
-  currentSlotTime: '11:00',
-  isFortnight: true, // Quincena activa por defecto para mostrar el comportamiento enriquecido
-  isSimulationPaused: false,
-  sourceMode: 'mock',
-  isLoading: true,
-  lastTickTimestamp: Date.now(),
-  toastMessage: null,
+      /**
+       * Recalcula plan, alertas y traslados de la fecha seleccionada.
+       * regenerar = true descarta el plan guardado y pide una propuesta nueva al motor
+       * (al cambiar reglas, quincena o ausencias); false reutiliza el plan guardado si existe.
+       */
+      const recalcular = async (regenerar: boolean) => {
+        const absences = await ausenciasService.getAbsences();
+        set({ absences });
+        const ctx = contexto();
+        const { offices, staff, currentSlotTime } = get();
 
-  showToast: (text, type = 'info') => {
-    set({ toastMessage: { text, type } });
-    setTimeout(() => {
-      if (get().toastMessage?.text === text) {
-        set({ toastMessage: null });
-      }
-    }, 4500);
-  },
+        let plan = regenerar ? null : await turnosService.getDayPlan(ctx.fecha);
 
-  clearToast: () => set({ toastMessage: null }),
+        // Un plan guardado con otras reglas se regenera, salvo que ya tenga trabajo humano encima
+        if (plan && plan.estado !== 'aprobado' && !tieneCambiosManuales(plan)) {
+          const firma = JSON.stringify(plan.reglasAplicadas ?? REGLAS_POR_DEFECTO);
+          if (firma !== JSON.stringify(get().reglas)) plan = null;
+        }
 
-  init: async () => {
-    set({ isLoading: true });
-    try {
-      const absences = await ausenciasService.getAbsences();
-      const metrics = await digiturnoService.getLiveMetrics();
+        if (!plan) {
+          plan = await motorService.generateDailyPlan(
+            ctx.fecha,
+            offices,
+            staff,
+            ctx.ausenciasDia,
+            ctx.dia,
+            ctx.isFortnight,
+            ctx.opciones
+          );
+          plan.reglasAplicadas = { ...get().reglas };
+          await turnosService.saveDayPlan(plan);
+        }
 
-      // Generar propuesta de plan del día con el motor
-      const plan = await motorService.generateDailyPlan(
-        get().selectedDate,
-        get().offices,
-        get().staff,
-        absences,
-        4, // Jueves
-        get().isFortnight
-      );
-
-      await turnosService.saveDayPlan(plan);
-
-      // Evaluar alertas y redistribuciones
-      const alerts = await motorService.evaluateAlerts(
-        get().offices,
-        get().staff,
-        absences,
-        plan,
-        get().currentSlotTime
-      );
-
-      const recommendations = await motorService.getRedistributions(
-        get().offices,
-        get().staff,
-        plan,
-        get().currentSlotTime,
-        4,
-        get().isFortnight
-      );
-
-      set({
-        absences,
-        currentPlan: plan,
-        liveMetrics: metrics,
-        alerts,
-        recommendations,
-        isLoading: false,
-      });
-    } catch (err) {
-      console.error('Error inicializando estado:', err);
-      set({ isLoading: false });
-    }
-  },
-
-  tickSimulation: async () => {
-    if (get().isSimulationPaused) return;
-
-    try {
-      // Obtener nuevas métricas en vivo con variación estocástica
-      const updatedMetrics = await digiturnoService.getLiveMetrics();
-      const plan = get().currentPlan;
-
-      if (plan) {
-        const freshAlerts = await motorService.evaluateAlerts(
-          get().offices,
-          get().staff,
-          get().absences,
+        const alerts = await motorService.evaluateAlerts(
+          offices,
+          staff,
+          ctx.ausenciasDia,
           plan,
-          get().currentSlotTime
+          currentSlotTime,
+          ctx.dia,
+          ctx.isFortnight
         );
 
-        set({
-          liveMetrics: updatedMetrics,
-          alerts: freshAlerts,
-          lastTickTimestamp: Date.now(),
-        });
-      } else {
-        set({
-          liveMetrics: updatedMetrics,
-          lastTickTimestamp: Date.now(),
-        });
-      }
-    } catch (error) {
-      console.error('Error en tick de simulación:', error);
-    }
-  },
+        const freshRecs = await motorService.getRedistributions(
+          offices,
+          staff,
+          plan,
+          currentSlotTime,
+          ctx.dia,
+          ctx.isFortnight,
+          ctx.opciones
+        );
 
-  toggleSimulation: (pause?: boolean) => {
-    const isPaused = pause !== undefined ? pause : !get().isSimulationPaused;
-    set({ isSimulationPaused: isPaused });
-    get().showToast(
-      isPaused ? 'Simulación en vivo pausada' : 'Simulación en vivo reanudada (actualización cada 5 s)',
-      'info'
-    );
-  },
+        // Conservar las decisiones ya tomadas (aceptada / rechazada) para esta fecha
+        const decisiones = get().decisionesTraslado;
+        const recommendations = freshRecs.map((r) => ({
+          ...r,
+          estado: decisiones[`${ctx.fecha}|${r.id}`] ?? r.estado,
+        }));
 
-  toggleFortnight: async () => {
-    const nextFortnight = !get().isFortnight;
-    set({ isFortnight: nextFortnight, isLoading: true });
-
-    const plan = await motorService.generateDailyPlan(
-      get().selectedDate,
-      get().offices,
-      get().staff,
-      get().absences,
-      4,
-      nextFortnight
-    );
-    await turnosService.saveDayPlan(plan);
-
-    const alerts = await motorService.evaluateAlerts(
-      get().offices,
-      get().staff,
-      get().absences,
-      plan,
-      get().currentSlotTime
-    );
-
-    const recs = await motorService.getRedistributions(
-      get().offices,
-      get().staff,
-      plan,
-      get().currentSlotTime,
-      4,
-      nextFortnight
-    );
-
-    set({
-      currentPlan: plan,
-      alerts,
-      recommendations: recs,
-      isLoading: false,
-    });
-
-    get().showToast(
-      nextFortnight
-        ? 'Modo Quincena Activado: Demanda incrementada en +32% para pagos y facturación'
-        : 'Modo Día Estándar: Demanda normal de media quincena',
-      'warning'
-    );
-  },
-
-  setSourceMode: (mode) => {
-    digiturnoService.setSourceMode(mode);
-    set({ sourceMode: mode });
-    get().showToast(
-      mode === 'mock'
-        ? 'Conexión a Digiturno: Modo Simulado Activo'
-        : 'Conexión a Digiturno: Modo API Real Configurado',
-      'info'
-    );
-  },
-
-  approvePlan: async (approverName: string) => {
-    const plan = get().currentPlan;
-    if (!plan) return;
-
-    try {
-      const approved = await turnosService.approveDayPlan(plan.fecha, approverName);
-      set({ currentPlan: approved });
-      get().showToast(
-        `Plan del día ${plan.fecha} aprobado exitosamente por ${approverName}`,
-        'success'
-      );
-    } catch (e) {
-      console.error('Error aprobando plan:', e);
-      get().showToast('Error al registrar la aprobación del plan', 'error');
-    }
-  },
-
-  updateSlot: async (colaboradorId, franja, newEstado) => {
-    const plan = get().currentPlan;
-    if (!plan) return;
-
-    try {
-      const updated = await turnosService.updateSlot(plan.fecha, colaboradorId, franja, {
-        estado: newEstado,
-      });
-      set({ currentPlan: updated });
-    } catch (e) {
-      console.error('Error actualizando slot:', e);
-    }
-  },
-
-  resetPlanToProposal: async () => {
-    const plan = get().currentPlan;
-    if (!plan) return;
-
-    try {
-      const reset = await turnosService.resetToProposal(plan.fecha);
-      set({ currentPlan: reset });
-      get().showToast('Malla restaurada a la propuesta algorítmica original del motor', 'info');
-    } catch (e) {
-      console.error('Error restaurando propuesta:', e);
-    }
-  },
-
-  createAbsence: async (data) => {
-    set({ isLoading: true });
-    try {
-      const newAbsence = await ausenciasService.createAbsence(data);
-      const updatedAbsences = await ausenciasService.getAbsences();
-
-      // Regenerar plan y evaluar impacto de la nueva ausencia
-      const newPlan = await motorService.generateDailyPlan(
-        get().selectedDate,
-        get().offices,
-        get().staff,
-        updatedAbsences,
-        4,
-        get().isFortnight
-      );
-      await turnosService.saveDayPlan(newPlan);
-
-      const alerts = await motorService.evaluateAlerts(
-        get().offices,
-        get().staff,
-        updatedAbsences,
-        newPlan,
-        get().currentSlotTime
-      );
-
-      const recommendations = await motorService.getRedistributions(
-        get().offices,
-        get().staff,
-        newPlan,
-        get().currentSlotTime,
-        4,
-        get().isFortnight
-      );
-
-      set({
-        absences: updatedAbsences,
-        currentPlan: newPlan,
-        alerts,
-        recommendations,
-        isLoading: false,
-      });
-
-      const staffMember = get().staff.find((s) => s.id === data.colaboradorId);
-      get().showToast(
-        `Ausencia registrada para ${staffMember?.nombre || 'colaborador'}. Malla de turnos y alertas recalculadas.`,
-        'warning'
-      );
-    } catch (e) {
-      console.error('Error creando ausencia:', e);
-      set({ isLoading: false });
-    }
-  },
-
-  removeAbsence: async (id) => {
-    set({ isLoading: true });
-    try {
-      await ausenciasService.deleteAbsence(id);
-      const updatedAbsences = await ausenciasService.getAbsences();
-
-      const newPlan = await motorService.generateDailyPlan(
-        get().selectedDate,
-        get().offices,
-        get().staff,
-        updatedAbsences,
-        4,
-        get().isFortnight
-      );
-      await turnosService.saveDayPlan(newPlan);
-
-      set({
-        absences: updatedAbsences,
-        currentPlan: newPlan,
-        isLoading: false,
-      });
-
-      get().showToast('Ausencia eliminada y puestos reintegrados a la malla.', 'info');
-    } catch (e) {
-      console.error('Error eliminando ausencia:', e);
-      set({ isLoading: false });
-    }
-  },
-
-  acceptRedistribution: async (id) => {
-    const rec = get().recommendations.find((r) => r.id === id);
-    if (!rec || !get().currentPlan) return;
-
-    // Actualizamos la recomendación a aceptada
-    const updatedRecs = get().recommendations.map((r) =>
-      r.id === id ? { ...r, estado: 'aceptada' as const } : r
-    );
-
-    // Ajustamos la malla: marcamos en la oficina destino como apoyo
-    const plan = get().currentPlan!;
-    const slots = plan.turnos[rec.colaboradorId]?.slots;
-    if (slots) {
-      const targetState = rec.modalidad === 'presencial' ? 'apoyo_presencial' : 'apoyo_virtual';
-      Object.keys(slots).forEach((franja) => {
-        if (franja >= rec.franjaInicio && franja <= rec.franjaFin) {
-          slots[franja] = {
-            franja,
-            estado: targetState,
-            oficinaAsignadaId: rec.oficinaDestinoId,
-            esModificadoManual: true,
-            nota: `Redistribución aprobada: apoyo a ${rec.oficinaDestinoNombre}`,
-          };
-        }
-      });
-    }
-
-    set({ recommendations: updatedRecs, currentPlan: { ...plan } });
-    get().showToast(
-      `Traslado aceptado: ${rec.colaboradorNombre} apoyará a ${rec.oficinaDestinoNombre} (${rec.modalidad}).`,
-      'success'
-    );
-  },
-
-  rejectRedistribution: async (id) => {
-    const updatedRecs = get().recommendations.map((r) =>
-      r.id === id ? { ...r, estado: 'rechazada' as const } : r
-    );
-    set({ recommendations: updatedRecs });
-    get().showToast('Recomendación de redistribución descartada.', 'info');
-  },
-
-  dismissAlert: (id) => {
-    set({ alerts: get().alerts.filter((a) => a.id !== id) });
-  },
-
-  getGlobalKpis: () => {
-    const metrics = get().liveMetrics;
-    if (!metrics || metrics.length === 0) {
-      return {
-        totalClientesEnFila: 0,
-        esperaPromedioMin: 0,
-        slaGlobal: 0.8,
-        personalActivo: 32,
-        personalRequerido: 34,
-        oficinasCriticas: 0,
+        set({ currentPlan: plan, alerts, recommendations });
       };
+
+      /** Ejecuta un recálculo mostrando el indicador de carga y registrando errores. */
+      const conCarga = async (etiqueta: string, tarea: () => Promise<void>) => {
+        set({ isLoading: true });
+        try {
+          await tarea();
+        } catch (e) {
+          console.error(`Error ${etiqueta}:`, e);
+          get().showToast(`No se pudo completar: ${etiqueta}`, 'error');
+        } finally {
+          set({ isLoading: false });
+        }
+      };
+
+      const decidirTraslado = (id: string, estado: EstadoDecision) => {
+        const fecha = get().selectedDate;
+        set({
+          recommendations: get().recommendations.map((r) => (r.id === id ? { ...r, estado } : r)),
+          decisionesTraslado: { ...get().decisionesTraslado, [`${fecha}|${id}`]: estado },
+        });
+      };
+
+      return {
+        offices: aplicarReglas(INITIAL_OFFICES, REGLAS_POR_DEFECTO),
+        staff: INITIAL_STAFF,
+        absences: [],
+        currentPlan: null,
+        alerts: [],
+        liveMetrics: [],
+        recommendations: [],
+
+        selectedDate: FECHA_BASE,
+        currentSlotTime: '11:00',
+        isFortnight: esQuincena(FECHA_BASE),
+        isSimulationPaused: false,
+        sourceMode: 'mock',
+        isLoading: true,
+        lastTickTimestamp: Date.now(),
+        toastMessage: null,
+
+        reglas: REGLAS_POR_DEFECTO,
+        decisionesTraslado: {},
+
+        showToast: (text, type = 'info') => {
+          set({ toastMessage: { text, type } });
+          setTimeout(() => {
+            if (get().toastMessage?.text === text) {
+              set({ toastMessage: null });
+            }
+          }, 4500);
+        },
+
+        clearToast: () => set({ toastMessage: null }),
+
+        init: async () => {
+          // Restaurar la fuente de datos y las reglas guardadas antes de calcular
+          digiturnoService.setSourceMode(get().sourceMode);
+          set({ offices: aplicarReglas(INITIAL_OFFICES, get().reglas) });
+
+          await conCarga('inicializando el estado', async () => {
+            const metrics = await digiturnoService.getLiveMetrics();
+            set({ liveMetrics: metrics });
+            await recalcular(false);
+          });
+        },
+
+        tickSimulation: async () => {
+          if (get().isSimulationPaused) return;
+
+          try {
+            // Obtener nuevas métricas en vivo con variación estocástica
+            const updatedMetrics = await digiturnoService.getLiveMetrics();
+            const plan = get().currentPlan;
+
+            if (plan) {
+              const ctx = contexto();
+              const freshAlerts = await motorService.evaluateAlerts(
+                get().offices,
+                get().staff,
+                ctx.ausenciasDia,
+                plan,
+                get().currentSlotTime,
+                ctx.dia,
+                ctx.isFortnight
+              );
+
+              set({
+                liveMetrics: updatedMetrics,
+                alerts: freshAlerts,
+                lastTickTimestamp: Date.now(),
+              });
+            } else {
+              set({
+                liveMetrics: updatedMetrics,
+                lastTickTimestamp: Date.now(),
+              });
+            }
+          } catch (error) {
+            console.error('Error en tick de simulación:', error);
+          }
+        },
+
+        toggleSimulation: (pause?: boolean) => {
+          const isPaused = pause !== undefined ? pause : !get().isSimulationPaused;
+          set({ isSimulationPaused: isPaused });
+          get().showToast(
+            isPaused ? 'Simulación en vivo pausada' : 'Simulación en vivo reanudada (actualización cada 5 s)',
+            'info'
+          );
+        },
+
+        toggleFortnight: async () => {
+          const nextFortnight = !get().isFortnight;
+          set({ isFortnight: nextFortnight });
+          await conCarga('cambiando el modo quincena', () => recalcular(true));
+          get().showToast(
+            nextFortnight
+              ? 'Modo Quincena Activado: Demanda incrementada en +32% para pagos y facturación'
+              : 'Modo Día Estándar: Demanda normal de media quincena',
+            'warning'
+          );
+        },
+
+        setSelectedDate: async (date: string) => {
+          const fecha = ajustarADiaHabil(date);
+          if (fecha === get().selectedDate) return;
+          // La quincena se sugiere según la fecha; el usuario puede cambiarla después
+          set({ selectedDate: fecha, isFortnight: esQuincena(fecha) });
+          await conCarga('cambiando de día', () => recalcular(false));
+          if (fecha !== date) {
+            get().showToast('Las oficinas no atienden los domingos: se muestra el lunes siguiente.', 'info');
+          }
+        },
+
+        updateReglas: async (nuevas: ReglasLaborales) => {
+          const reglas = normalizarReglas(nuevas);
+          set({ reglas, offices: aplicarReglas(INITIAL_OFFICES, reglas) });
+          await conCarga('aplicando las reglas', () => recalcular(true));
+          get().showToast(
+            `Reglas aplicadas: la malla del ${formatoFechaLarga(get().selectedDate)} se recalculó con SLA ${Math.round(
+              reglas.slaObjetivo * 100
+            )}% y almuerzo de ${reglas.duracionAlmuerzoMin} min.`,
+            'success'
+          );
+        },
+
+        setSourceMode: (mode) => {
+          digiturnoService.setSourceMode(mode);
+          set({ sourceMode: mode });
+          get().showToast(
+            mode === 'mock'
+              ? 'Conexión a Digiturno: Modo Simulado Activo'
+              : 'Conexión a Digiturno: Modo API Real Configurado',
+            'info'
+          );
+        },
+
+        approvePlan: async (approverName: string) => {
+          const plan = get().currentPlan;
+          if (!plan) return;
+
+          try {
+            const approved = await turnosService.approveDayPlan(plan.fecha, approverName);
+            set({ currentPlan: approved });
+            get().showToast(
+              `Plan del día ${plan.fecha} aprobado exitosamente por ${approverName}`,
+              'success'
+            );
+          } catch (e) {
+            console.error('Error aprobando plan:', e);
+            get().showToast('Error al registrar la aprobación del plan', 'error');
+          }
+        },
+
+        updateSlot: async (colaboradorId, franja, newEstado) => {
+          const plan = get().currentPlan;
+          if (!plan) return;
+
+          try {
+            const updated = await turnosService.updateSlot(plan.fecha, colaboradorId, franja, {
+              estado: newEstado,
+            });
+            set({ currentPlan: updated });
+          } catch (e) {
+            console.error('Error actualizando slot:', e);
+          }
+        },
+
+        resetPlanToProposal: async () => {
+          const plan = get().currentPlan;
+          if (!plan) return;
+
+          try {
+            const reset = await turnosService.resetToProposal(plan.fecha);
+            set({ currentPlan: reset });
+            get().showToast('Malla restaurada a la propuesta algorítmica original del motor', 'info');
+          } catch (e) {
+            console.error('Error restaurando propuesta:', e);
+          }
+        },
+
+        createAbsence: async (data) => {
+          await conCarga('registrando la ausencia', async () => {
+            await ausenciasService.createAbsence(data);
+            // Regenerar plan y evaluar impacto de la nueva ausencia
+            await recalcular(true);
+            const staffMember = get().staff.find((s) => s.id === data.colaboradorId);
+            get().showToast(
+              `Ausencia registrada para ${staffMember?.nombre || 'colaborador'}. Malla de turnos y alertas recalculadas.`,
+              'warning'
+            );
+          });
+        },
+
+        removeAbsence: async (id) => {
+          await conCarga('eliminando la ausencia', async () => {
+            await ausenciasService.deleteAbsence(id);
+            await recalcular(true);
+            get().showToast('Ausencia eliminada y puestos reintegrados a la malla.', 'info');
+          });
+        },
+
+        acceptRedistribution: async (id) => {
+          const rec = get().recommendations.find((r) => r.id === id);
+          if (!rec || !get().currentPlan) return;
+
+          // Ajustamos la malla (sobre una copia): marcamos en la oficina destino como apoyo
+          const plan: DayPlan = JSON.parse(JSON.stringify(get().currentPlan));
+          const slots = plan.turnos[rec.colaboradorId]?.slots;
+          if (slots) {
+            const targetState = rec.modalidad === 'presencial' ? 'apoyo_presencial' : 'apoyo_virtual';
+            Object.keys(slots).forEach((franja) => {
+              // Solo se reasignan las franjas en que atiende: se respetan su almuerzo y pausas
+              if (franja >= rec.franjaInicio && franja <= rec.franjaFin && slots[franja].estado === 'atencion') {
+                slots[franja] = {
+                  franja,
+                  estado: targetState,
+                  oficinaAsignadaId: rec.oficinaDestinoId,
+                  esModificadoManual: true,
+                  nota: `Redistribución aprobada: apoyo a ${rec.oficinaDestinoNombre}`,
+                };
+              }
+            });
+          }
+
+          await turnosService.saveDayPlan(plan, { esPropuesta: false });
+          set({ currentPlan: plan });
+          decidirTraslado(id, 'aceptada');
+          get().showToast(
+            `Traslado aceptado: ${rec.colaboradorNombre} apoyará a ${rec.oficinaDestinoNombre} (${rec.modalidad}).`,
+            'success'
+          );
+        },
+
+        rejectRedistribution: async (id) => {
+          decidirTraslado(id, 'rechazada');
+          get().showToast('Recomendación de redistribución descartada.', 'info');
+        },
+
+        dismissAlert: (id) => {
+          set({ alerts: get().alerts.filter((a) => a.id !== id) });
+        },
+
+        resetDemoData: () => {
+          clearDemoData();
+          // Recargar para que los servicios vuelvan a los datos iniciales
+          window.location.reload();
+        },
+
+        getGlobalKpis: () => {
+          const metrics = get().liveMetrics;
+          if (!metrics || metrics.length === 0) {
+            return {
+              totalClientesEnFila: 0,
+              esperaPromedioMin: 0,
+              slaGlobal: 0.8,
+              personalActivo: 32,
+              personalRequerido: 34,
+              oficinasCriticas: 0,
+            };
+          }
+
+          const totalFila = metrics.reduce((acc, m) => acc + m.clientesEnFila, 0);
+          const avgWait = metrics.reduce((acc, m) => acc + m.esperaPromedioMin, 0) / metrics.length;
+          const avgSla = metrics.reduce((acc, m) => acc + m.slaActual, 0) / metrics.length;
+          const totalActivos = metrics.reduce((acc, m) => acc + m.agentesActivos, 0);
+          const totalReq = metrics.reduce((acc, m) => acc + m.agentesRequeridos, 0);
+          const criticas = metrics.filter((m) => m.estadoSla === 'critico').length;
+
+          return {
+            totalClientesEnFila: totalFila,
+            esperaPromedioMin: Number(avgWait.toFixed(1)),
+            slaGlobal: Number(avgSla.toFixed(3)),
+            personalActivo: totalActivos,
+            personalRequerido: totalReq,
+            oficinasCriticas: criticas,
+          };
+        },
+      };
+    },
+    {
+      name: STORAGE_KEYS.app,
+      version: 2,
+      // Solo se guardan preferencias, reglas y decisiones; el plan y las ausencias los guardan los servicios
+      partialize: (state) => ({
+        selectedDate: state.selectedDate,
+        isFortnight: state.isFortnight,
+        isSimulationPaused: state.isSimulationPaused,
+        sourceMode: state.sourceMode,
+        reglas: state.reglas,
+        decisionesTraslado: state.decisionesTraslado,
+      }),
+      // La versión 1 guardaba la lista de recomendaciones; se descarta sin perder lo demás
+      migrate: (persisted) => {
+        const { recommendations: _descartadas, ...resto } = (persisted ?? {}) as Record<string, unknown>;
+        return resto as unknown as Pick<
+          AppState,
+          'selectedDate' | 'isFortnight' | 'isSimulationPaused' | 'sourceMode' | 'reglas' | 'decisionesTraslado'
+        >;
+      },
     }
-
-    const totalFila = metrics.reduce((acc, m) => acc + m.clientesEnFila, 0);
-    const avgWait = metrics.reduce((acc, m) => acc + m.esperaPromedioMin, 0) / metrics.length;
-    const avgSla = metrics.reduce((acc, m) => acc + m.slaActual, 0) / metrics.length;
-    const totalActivos = metrics.reduce((acc, m) => acc + m.agentesActivos, 0);
-    const totalReq = metrics.reduce((acc, m) => acc + m.agentesRequeridos, 0);
-    const criticas = metrics.filter((m) => m.estadoSla === 'critico').length;
-
-    return {
-      totalClientesEnFila: totalFila,
-      esperaPromedioMin: Number(avgWait.toFixed(1)),
-      slaGlobal: Number(avgSla.toFixed(3)),
-      personalActivo: totalActivos,
-      personalRequerido: totalReq,
-      oficinasCriticas: criticas,
-    };
-  },
-}));
+  )
+);

@@ -1,14 +1,11 @@
 import React from 'react';
 import {
   ArrowRight,
-  MapPin,
   Laptop,
   Building,
-  Clock,
   TrendingDown,
   Check,
   X,
-  Compass,
 } from 'lucide-react';
 import { RedistributionRecommendation } from '../../types';
 
@@ -16,14 +13,12 @@ interface RecommendationCardProps {
   recommendation: RedistributionRecommendation;
   onAccept: () => void;
   onReject: () => void;
-  isCompact?: boolean;
 }
 
 export const RecommendationCard: React.FC<RecommendationCardProps> = ({
   recommendation,
   onAccept,
   onReject,
-  isCompact = false,
 }) => {
   const isVirtual = recommendation.modalidad === 'virtual';
   const isAccepted = recommendation.estado === 'aceptada';

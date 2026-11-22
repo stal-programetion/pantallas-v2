@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Office, RedistributionRecommendation } from '../../types';
-import { TrafficLight } from '../common/TrafficLight';
 
 interface GeographicRouteMapProps {
   offices: Office[];

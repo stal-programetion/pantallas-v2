@@ -1,5 +1,5 @@
 import React from 'react';
-import { CreditCard, FileText, Flame, Users, Zap, Award } from 'lucide-react';
+import { CreditCard, FileText, Flame, Users } from 'lucide-react';
 import { TooltipWhy } from '../common/TooltipWhy';
 
 export const UserBehaviorWidget: React.FC<{ bare?: boolean }> = ({ bare = false }) => {

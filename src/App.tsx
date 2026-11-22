@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
+import { RequireAuth } from './components/auth/RequireAuth';
 import { DashboardPage } from './pages/DashboardPage';
 import { DayPlanPage } from './pages/DayPlanPage';
 import { ShiftGridPage } from './pages/ShiftGridPage';
@@ -20,8 +21,15 @@ export const App: React.FC = () => {
         {/* Pantalla 1: Login y Selección de Rol */}
         <Route path="/login" element={<LoginPage />} />
 
-        {/* Layout Principal con Navegación para las 10 pantallas operativas */}
-        <Route path="/" element={<AppLayout />}>
+        {/* Layout Principal con Navegación para las 10 pantallas operativas (requiere sesión) */}
+        <Route
+          path="/"
+          element={
+            <RequireAuth>
+              <AppLayout />
+            </RequireAuth>
+          }
+        >
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="plan-dia" element={<DayPlanPage />} />

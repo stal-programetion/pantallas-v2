@@ -4,10 +4,6 @@ import {
   TrendingDown,
   Building,
   Laptop,
-  CheckCircle2,
-  Clock,
-  Sparkles,
-  Compass,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { GeographicRouteMap } from '../components/redistribution/GeographicRouteMap';
@@ -49,12 +45,13 @@ export const RedistributionPage: React.FC = () => {
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Detección automática de déficit y superávit de agentes. Propone compensaciones presenciales (&lt;45 km) o enlaces virtuales entre ciudades.
+            Compara la presión de cada oficina en la franja pico y propone mover personal de la más holgada a la más
+            congestionada: presencial si está cerca y hay puesto libre, o apoyo virtual entre ciudades.
           </p>
         </div>
 
         <TooltipWhy
-          explanation="El algoritmo calcula la distancia haversine entre las 14 oficinas. Si la sede con déficit está a menos de 45 km de una sede con superávit (ej. Corozal a Sincelejo: 15 km), propone traslado presencial. Para distancias mayores (ej. Cartagena a Montería), propone ventanilla remota Digiturno."
+          explanation="Para cada posible traslado, el motor calcula con Erlang C cuántos minutos de espera se ahorran los clientes del destino y cuántos se agregan en el origen, y propone primero los de mayor beneficio neto. El origen nunca queda sin nadie atendiendo. Si las sedes están dentro de la distancia máxima configurada (haversine) y el destino tiene un puesto libre, el apoyo es presencial; si no, se atiende de forma remota por Digiturno."
           rule="Modelo de Optimización Geográfica v2.4"
         />
       </div>
@@ -69,7 +66,7 @@ export const RedistributionPage: React.FC = () => {
           iconBgColor="bg-purple-50"
           iconColor="text-purple-700"
           whyExplanation="Número de recomendaciones generadas para mitigar desbalances entre sedes."
-          whyRule="Detección Déficit / Superávit"
+          whyRule="Beneficio neto en minutos de espera"
         />
 
         <KpiCard

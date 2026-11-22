@@ -17,8 +17,8 @@ export function evaluateSystemAlerts(
   const alerts: Alert[] = [];
   const now = new Date().toISOString();
 
-  // 1. Alertas de ausencias sin cubrir
-  const activeAbsences = absences.filter((a) => a.estado === 'activa');
+  // 1. Alertas de ausencias sin cubrir (se reciben ya filtradas por la fecha del plan)
+  const activeAbsences = absences.filter((a) => a.estado !== 'finalizada');
   activeAbsences.forEach((abs) => {
     const staff = staffList.find((s) => s.id === abs.colaboradorId);
     if (!staff) return;

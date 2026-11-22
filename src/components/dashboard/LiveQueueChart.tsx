@@ -7,7 +7,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
 } from 'recharts';
 import { OPERATING_SLOTS, predictArrivals } from '../../engine/forecast';
 import { useAppStore } from '../../store/useAppStore';

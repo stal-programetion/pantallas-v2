@@ -1,82 +1,23 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { FileSpreadsheet, Printer } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
 import { OPERATING_SLOTS, predictArrivals } from '../engine/forecast';
+import { diaSemana } from '../engine/calendar';
 import { calculateRequiredAgents } from '../engine/erlangC';
 import { validateShiftSlotChange } from '../engine/assignmentEngine';
 import type { Office, SlotStatus, Staff } from '../types';
+import { ORDER, ST } from '../components/shiftGrid/slotStates';
+import { prepararMalla } from '../export/mallaData';
 
 /* ------------------------------------------------------------------ */
 /*  Constantes del diseño aprobado                                     */
 /* ------------------------------------------------------------------ */
 
-/** Día de la semana que usa el motor del store para generar el plan (jueves). */
-const DAY_OF_WEEK = 4;
 const PEAK = ['10:00', '10:30', '11:00', '11:30'];
 const isLunchSlot = (t: string) => t >= '12:00' && t <= '13:30';
 const isPeakSlot = (t: string) => PEAK.includes(t);
-
-const ORDER: SlotStatus[] = [
-  'atencion',
-  'almuerzo',
-  'apoyo_virtual',
-  'apoyo_presencial',
-  'pausa',
-  'libre',
-  'ausente',
-];
-
-interface StateInfo {
-  label: string;
-  code: string;
-  bg: string;
-  fg: string;
-  border: string;
-  cuenta: boolean;
-  short: string;
-  desc: string;
-}
-
-const ST: Record<SlotStatus, StateInfo> = {
-  atencion: {
-    label: 'Atención', code: 'AT', bg: '#1f6496', fg: '#ffffff', border: '#1f6496', cuenta: true,
-    short: 'En su puesto atendiendo clientes.',
-    desc: 'Está en su puesto atendiendo clientes en la oficina. Es el estado normal de trabajo.',
-  },
-  almuerzo: {
-    label: 'Almuerzo', code: 'AL', bg: '#f7c548', fg: '#3d2a00', border: '#d9a521', cuenta: false,
-    short: 'Hora de almuerzo (1 hora = 2 casillas).',
-    desc: 'Hora de almuerzo. El motor los escalona entre 12:00 y 14:00 para que nunca salgan todos a la vez.',
-  },
-  apoyo_virtual: {
-    label: 'Apoyo virtual', code: 'AV', bg: '#256f6d', fg: '#ffffff', border: '#256f6d', cuenta: true,
-    short: 'Atiende remoto (video o chat) a esta oficina.',
-    desc: 'Atiende de forma remota (video o chat). Se usa para reforzar horas pico o cubrir un almuerzo.',
-  },
-  apoyo_presencial: {
-    label: 'Apoyo físico', code: 'AF', bg: '#2e3d82', fg: '#ffffff', border: '#2e3d82', cuenta: true,
-    short: 'Se traslada a apoyar en otra sede.',
-    desc: 'Se traslada físicamente a reforzar otra oficina durante esta franja.',
-  },
-  pausa: {
-    label: 'Pausa', code: 'PA', bg: '#cfeefa', fg: '#0b4a66', border: '#7cc9ea', cuenta: false,
-    short: 'Pausa activa corta, vuelve enseguida.',
-    desc: 'Pausa corta (activa o de descanso). No atiende, pero vuelve en la siguiente franja.',
-  },
-  libre: {
-    label: 'Libre', code: 'LI', bg: '#eef0f4', fg: '#3f4a5c', border: '#b4bccb', cuenta: false,
-    short: 'Fuera de su horario de contrato.',
-    desc: 'Fuera de su horario de contrato (llega tarde o sale temprano). No está en la oficina.',
-  },
-  ausente: {
-    label: 'Ausente', code: 'AU',
-    bg: 'repeating-linear-gradient(135deg, #fde2e1 0 5px, #f6c2bf 5px 10px)',
-    fg: '#8a1414', border: '#e19995', cuenta: false,
-    short: 'Incapacidad, permiso o licencia.',
-    desc: 'No vino por incapacidad, permiso o licencia. Se registra desde la pantalla de Ausencias.',
-  },
-};
 
 /** Colores semánticos de cobertura (no cambian con la marca: significan suficiente / falta / sin nadie). */
 const COV = {
@@ -188,6 +129,7 @@ export const ShiftGridPage: React.FC = () => {
     updateSlot,
     resetPlanToProposal,
     showToast,
+    reglas,
   } = useAppStore();
   const { canEditShifts } = useAuthStore();
   const canEdit = canEditShifts();
@@ -198,6 +140,34 @@ export const ShiftGridPage: React.FC = () => {
   const [applying, setApplying] = useState(false);
   const [tourOn, setTourOn] = useState<boolean>(readTour);
   const [step, setStep] = useState(0);
+  const [exportando, setExportando] = useState(false);
+
+  /* ---- Exportar la malla del día ---- */
+  const datosExportacion = () =>
+    currentPlan ? prepararMalla({ plan: currentPlan, offices, staff, isFortnight, reglas }) : null;
+
+  const exportarExcel = async () => {
+    const datos = datosExportacion();
+    if (!datos) return;
+    setExportando(true);
+    try {
+      const { exportarMallaExcel } = await import('../export/exportarExcel');
+      await exportarMallaExcel(datos);
+      showToast('Malla exportada a Excel.', 'success');
+    } catch (e) {
+      console.error('Error exportando a Excel:', e);
+      showToast('No se pudo generar el archivo de Excel.', 'error');
+    } finally {
+      setExportando(false);
+    }
+  };
+
+  const imprimir = async () => {
+    const datos = datosExportacion();
+    if (!datos) return;
+    const { imprimirMalla } = await import('../export/imprimirMalla');
+    imprimirMalla(datos);
+  };
 
   const slots = OPERATING_SLOTS;
 
@@ -206,7 +176,7 @@ export const ShiftGridPage: React.FC = () => {
     const map: Record<string, number[]> = {};
     offices.forEach((o) => {
       map[o.id] = slots.map((t) => {
-        const f = predictArrivals(o.id, DAY_OF_WEEK, t, isFortnight);
+        const f = predictArrivals(o.id, diaSemana(selectedDate), t, isFortnight);
         return calculateRequiredAgents(
           f.tasaLlegadasHora,
           f.tiempoAtencionPromedioMin,
@@ -217,7 +187,7 @@ export const ShiftGridPage: React.FC = () => {
       });
     });
     return map;
-  }, [offices, isFortnight, slots]);
+  }, [offices, isFortnight, slots, selectedDate]);
 
   /** Estado de una persona en una franja (con valor por defecto si el plan no la trae). */
   const stateOf = useCallback(
@@ -457,8 +427,8 @@ export const ShiftGridPage: React.FC = () => {
 
   const gridCols = `220px repeat(${slots.length}, minmax(44px, 1fr))`;
   const card: React.CSSProperties = {
-    background: '#ffffff',
-    border: '1px solid #d6dfeb',
+    background: 'var(--sg-surface)',
+    border: '1px solid var(--sg-border)',
     borderRadius: 16,
   };
 
@@ -466,7 +436,7 @@ export const ShiftGridPage: React.FC = () => {
     <div
       style={{
         fontFamily: FONT_SANS,
-        color: '#0f1b2d',
+        color: 'var(--sg-text)',
         display: 'flex',
         flexDirection: 'column',
         gap: 20,
@@ -475,22 +445,41 @@ export const ShiftGridPage: React.FC = () => {
       {/* ===== Encabezado ===== */}
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="flex flex-col gap-1.5 max-w-[720px]">
-          <span style={{ fontSize: 13, color: '#5a6b82', fontWeight: 500 }}>
+          <span style={{ fontSize: 13, color: 'var(--sg-muted)', fontWeight: 500 }}>
             {dateLabel} · {planLabel}
           </span>
           <h1 style={{ margin: 0, fontSize: 30, lineHeight: 1.15, fontWeight: 700, letterSpacing: '-.01em' }}>
             Malla de turnos
           </h1>
-          <p style={{ margin: 0, fontSize: 15, lineHeight: 1.5, color: '#3d4c63' }}>
+          <p style={{ margin: 0, fontSize: 15, lineHeight: 1.5, color: 'var(--sg-text-2)' }}>
             Quién está haciendo qué, cada media hora, en cada oficina. Úsala para asegurarte de que{' '}
             <strong>ninguna oficina se quede sin gente atendiendo</strong>, sobre todo en almuerzo y horas pico.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={exportarExcel}
+            disabled={exportando}
+            title="Descargar la malla del día como archivo de Excel"
+            className="inline-flex items-center gap-2"
+            style={{ ...btnBase, fontSize: 14, fontWeight: 600, padding: '0 14px', border: '1px solid var(--sg-border-2)', background: 'var(--sg-surface)', color: 'var(--sg-ok-text)', cursor: exportando ? 'wait' : 'pointer' }}
+          >
+            <FileSpreadsheet size={17} />
+            {exportando ? 'Generando…' : 'Excel'}
+          </button>
+          <button
+            onClick={imprimir}
+            title="Imprimir la malla o guardarla como PDF"
+            className="inline-flex items-center gap-2"
+            style={{ ...btnBase, fontSize: 14, fontWeight: 600, padding: '0 14px', border: '1px solid var(--sg-border-2)', background: 'var(--sg-surface)', color: 'var(--sg-text)' }}
+          >
+            <Printer size={17} />
+            Imprimir / PDF
+          </button>
           {!tourOn && (
             <button
               onClick={showTour}
-              style={{ ...btnBase, fontSize: 14, fontWeight: 600, padding: '0 16px', border: '1px solid #b9c7da', background: '#fff', color: '#1f6496' }}
+              style={{ ...btnBase, fontSize: 14, fontWeight: 600, padding: '0 16px', border: '1px solid var(--sg-border-2)', background: 'var(--sg-surface)', color: 'var(--sg-accent-text)' }}
             >
               ¿Cómo se usa? Ver guía
             </button>
@@ -504,9 +493,9 @@ export const ShiftGridPage: React.FC = () => {
                 fontSize: 14,
                 fontWeight: 600,
                 padding: '0 16px',
-                border: '1px solid #b9c7da',
-                background: '#fff',
-                color: manualCount && canEdit ? '#0f1b2d' : '#8b97a8',
+                border: '1px solid var(--sg-border-2)',
+                background: 'var(--sg-surface)',
+                color: manualCount && canEdit ? 'var(--sg-text)' : 'var(--sg-faint)',
                 cursor: manualCount && canEdit ? 'pointer' : 'not-allowed',
               }}
             >
@@ -519,7 +508,7 @@ export const ShiftGridPage: React.FC = () => {
       {!canEdit && (
         <div
           role="status"
-          style={{ background: '#e8f6fc', border: '1px solid #86bfe2', color: '#0b4a66', borderRadius: 12, padding: '12px 16px', fontSize: 14 }}
+          style={{ background: 'var(--sg-info-bg)', border: '1px solid #86bfe2', color: 'var(--sg-info-fg)', borderRadius: 12, padding: '12px 16px', fontSize: 14 }}
         >
           <strong>Modo solo lectura.</strong> Tu rol puede consultar la malla y la cobertura, pero no cambiar casillas.
         </div>
@@ -530,12 +519,12 @@ export const ShiftGridPage: React.FC = () => {
         <section aria-label="Guía paso a paso" style={{ ...card, padding: '20px 22px' }} className="flex flex-wrap items-stretch gap-x-7 gap-y-5">
           <div className="flex flex-col gap-3" style={{ flex: '1 1 260px' }}>
             <div className="flex items-center justify-between gap-3">
-              <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: '#1f6496' }}>
+              <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--sg-accent-text)' }}>
                 Guía rápida · Paso {step + 1} de {STEPS.length}
               </span>
               <button
                 onClick={hideTour}
-                style={{ font: 'inherit', fontSize: 13, color: '#5a6b82', background: 'transparent', border: 0, minHeight: 44, padding: '0 6px', cursor: 'pointer', textDecoration: 'underline' }}
+                style={{ font: 'inherit', fontSize: 13, color: 'var(--sg-muted)', background: 'transparent', border: 0, minHeight: 44, padding: '0 6px', cursor: 'pointer', textDecoration: 'underline' }}
               >
                 Ocultar guía
               </button>
@@ -555,8 +544,8 @@ export const ShiftGridPage: React.FC = () => {
                         ...(on
                           ? { background: '#1f6496', color: '#fff', border: '2px solid #1f6496' }
                           : done
-                            ? { background: '#e6f3fb', color: '#1f6496', border: '2px solid #86bfe2' }
-                            : { background: '#fff', color: '#5a6b82', border: '2px solid #d6dfeb' }),
+                            ? { background: 'var(--sg-info-bg)', color: 'var(--sg-accent-text)', border: '2px solid #86bfe2' }
+                            : { background: 'var(--sg-surface)', color: 'var(--sg-muted)', border: '2px solid var(--sg-border)' }),
                       }}
                     >
                       {i + 1}
@@ -566,12 +555,12 @@ export const ShiftGridPage: React.FC = () => {
               })}
             </ol>
             <h2 style={{ margin: '4px 0 0', fontSize: 20, lineHeight: 1.25, fontWeight: 700 }}>{STEPS[step].title}</h2>
-            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55, color: '#3d4c63' }}>{STEPS[step].text}</p>
+            <p style={{ margin: 0, fontSize: 15, lineHeight: 1.55, color: 'var(--sg-text-2)' }}>{STEPS[step].text}</p>
             <div className="flex gap-2.5 mt-auto pt-1">
               <button
                 onClick={() => setStep((s) => Math.max(0, s - 1))}
                 disabled={step === 0}
-                style={{ ...btnBase, fontSize: 14, fontWeight: 600, padding: '0 18px', border: '1px solid #b9c7da', background: '#fff', color: step === 0 ? '#8b97a8' : '#0f1b2d', cursor: step === 0 ? 'not-allowed' : 'pointer' }}
+                style={{ ...btnBase, fontSize: 14, fontWeight: 600, padding: '0 18px', border: '1px solid var(--sg-border-2)', background: 'var(--sg-surface)', color: step === 0 ? 'var(--sg-faint)' : 'var(--sg-text)', cursor: step === 0 ? 'not-allowed' : 'pointer' }}
               >
                 Anterior
               </button>
@@ -589,10 +578,10 @@ export const ShiftGridPage: React.FC = () => {
               </button>
             </div>
           </div>
-          <div className="flex flex-col gap-2.5" style={{ flex: '1 1 300px', background: '#f6f8fb', borderRadius: 12, padding: '16px 18px' }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#3d4c63' }}>Prueba esto ahora</span>
+          <div className="flex flex-col gap-2.5" style={{ flex: '1 1 300px', background: 'var(--sg-subtle)', borderRadius: 12, padding: '16px 18px' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--sg-text-2)' }}>Prueba esto ahora</span>
             <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55 }}>{stepTry[step]}</p>
-            <span style={{ fontSize: 12, color: '#5a6b82', marginTop: 'auto' }}>
+            <span style={{ fontSize: 12, color: 'var(--sg-muted)', marginTop: 'auto' }}>
               La zona de la pantalla que explica este paso está marcada con un borde azul claro.
             </span>
           </div>
@@ -604,7 +593,7 @@ export const ShiftGridPage: React.FC = () => {
         <div className="flex flex-col gap-3" style={{ flex: '2 1 420px', ...card, padding: '16px 18px', ...ringStyle(0) }}>
           <div className="flex flex-wrap items-baseline gap-2">
             <span style={{ fontSize: 14, fontWeight: 700 }}>1. Elige la oficina</span>
-            <span style={{ fontSize: 13, color: '#5a6b82' }}>El número naranja indica franjas donde falta gente.</span>
+            <span style={{ fontSize: 13, color: 'var(--sg-muted)' }}>El número naranja indica franjas donde falta gente.</span>
           </div>
           <div role="group" aria-label="Oficinas" className="flex flex-wrap gap-2">
             {offices.map((o) => {
@@ -623,7 +612,7 @@ export const ShiftGridPage: React.FC = () => {
                     font: 'inherit', minHeight: 56, padding: '8px 14px', borderRadius: 12, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 12, textAlign: 'left',
                     ...(on
                       ? { background: '#1f2b6b', color: '#fff', border: '1px solid #1f2b6b' }
-                      : { background: '#fff', color: '#0f1b2d', border: '1px solid #c9d4e3' }),
+                      : { background: 'var(--sg-surface)', color: 'var(--sg-text)', border: '1px solid var(--sg-border-2)' }),
                   }}
                 >
                   <span className="flex flex-col items-start gap-0.5">
@@ -662,13 +651,13 @@ export const ShiftGridPage: React.FC = () => {
       <section aria-label="Qué significa cada color" className="flex flex-col gap-3" style={{ ...card, padding: '16px 18px', ...ringStyle(1) }}>
         <div className="flex flex-wrap items-baseline gap-2">
           <span style={{ fontSize: 14, fontWeight: 700 }}>2. Qué significa cada casilla</span>
-          <span style={{ fontSize: 13, color: '#5a6b82' }}>
-            Las marcadas con <strong style={{ color: '#0f1b2d' }}>✓ cuenta</strong> suman a la cobertura de la oficina.
+          <span style={{ fontSize: 13, color: 'var(--sg-muted)' }}>
+            Las marcadas con <strong style={{ color: 'var(--sg-text)' }}>✓ cuenta</strong> suman a la cobertura de la oficina.
           </span>
         </div>
         <div className="grid gap-2.5" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
           {ORDER.map((k) => (
-            <div key={k} className="flex items-start gap-2.5" style={{ padding: 10, borderRadius: 10, background: '#f6f8fb' }}>
+            <div key={k} className="flex items-start gap-2.5" style={{ padding: 10, borderRadius: 10, background: 'var(--sg-subtle)' }}>
               <span aria-hidden="true" style={chipStyle(k, 36)}>
                 {ST[k].code}
               </span>
@@ -678,13 +667,13 @@ export const ShiftGridPage: React.FC = () => {
                   <span
                     style={{
                       fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 10,
-                      ...(ST[k].cuenta ? { background: '#dcf2e3', color: '#14532d' } : { background: '#e9edf3', color: '#3f4a5c' }),
+                      ...(ST[k].cuenta ? { background: '#dcf2e3', color: '#14532d' } : { background: 'var(--sg-subtle-2)', color: 'var(--sg-text-2)' }),
                     }}
                   >
                     {ST[k].cuenta ? '✓ cuenta' : 'no cuenta'}
                   </span>
                 </span>
-                <span style={{ fontSize: 13, lineHeight: 1.45, color: '#3d4c63' }}>{ST[k].desc}</span>
+                <span style={{ fontSize: 13, lineHeight: 1.45, color: 'var(--sg-text-2)' }}>{ST[k].desc}</span>
               </div>
             </div>
           ))}
@@ -694,18 +683,18 @@ export const ShiftGridPage: React.FC = () => {
       {/* ===== Malla + panel de edición ===== */}
       <section className="flex flex-wrap items-start gap-4">
         <div style={{ flex: '999 1 640px', minWidth: 0, ...card, overflow: 'hidden', ...ringStyle(2) }}>
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2" style={{ padding: '14px 18px', borderBottom: '1px solid #e3e9f1' }}>
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2" style={{ padding: '14px 18px', borderBottom: '1px solid var(--sg-line)' }}>
             <div className="flex flex-col gap-0.5">
               <span style={{ fontSize: 16, fontWeight: 700 }}>{office.nombre}</span>
-              <span style={{ fontSize: 13, color: '#5a6b82' }}>
+              <span style={{ fontSize: 13, color: 'var(--sg-muted)' }}>
                 {office.ciudad}, {office.departamento} · {office.capacidadPuestos} puestos · {officeStaff.length} {officeStaff.length === 1 ? 'persona asignada' : 'personas asignadas'}
               </span>
             </div>
-            <div className="flex flex-wrap gap-3.5" style={{ fontSize: 12, color: '#3d4c63' }}>
+            <div className="flex flex-wrap gap-3.5" style={{ fontSize: 12, color: 'var(--sg-text-2)' }}>
               <Swatch bg="#fff3d6" border="#e8c56a">Ventana de almuerzo</Swatch>
               <Swatch bg="#e3eefb" border="#9cbfe8">Hora pico prevista</Swatch>
               <span className="inline-flex items-center gap-1.5">
-                <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 4, background: CYAN, boxShadow: `0 0 0 2px #fff, 0 0 0 3px ${CYAN}` }} />
+                <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: 4, background: CYAN, boxShadow: `0 0 0 2px var(--sg-surface), 0 0 0 3px ${CYAN}` }} />
                 Cambiado a mano
               </span>
             </div>
@@ -714,10 +703,10 @@ export const ShiftGridPage: React.FC = () => {
           <div style={{ overflowX: 'auto' }}>
             <div style={{ minWidth: 1040 }}>
               {/* Encabezado de horas */}
-              <div style={{ display: 'grid', gridTemplateColumns: gridCols, borderBottom: '1px solid #e3e9f1', background: '#f6f8fb' }}>
-                <div className="flex flex-col justify-center" style={{ padding: '10px 14px', fontSize: 12, fontWeight: 600, color: '#3d4c63' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: gridCols, borderBottom: '1px solid var(--sg-line)', background: 'var(--sg-subtle)' }}>
+                <div className="flex flex-col justify-center" style={{ padding: '10px 14px', fontSize: 12, fontWeight: 600, color: 'var(--sg-text-2)' }}>
                   <span>Persona</span>
-                  <span style={{ fontWeight: 400, color: '#5a6b82' }}>cada casilla = 30 min</span>
+                  <span style={{ fontWeight: 400, color: 'var(--sg-muted)' }}>cada casilla = 30 min</span>
                 </div>
                 {slots.map((t) => {
                   const lunch = isLunchSlot(t);
@@ -728,7 +717,7 @@ export const ShiftGridPage: React.FC = () => {
                       className="flex flex-col items-center justify-center gap-0.5"
                       style={{
                         padding: '8px 2px', fontFamily: FONT_MONO, fontSize: 12, fontWeight: 600, minHeight: 48,
-                        ...(lunch ? { background: '#fff3d6', color: '#6b4a00' } : peak ? { background: '#e3eefb', color: '#0b4a8f' } : { color: '#3d4c63' }),
+                        ...(lunch ? { background: 'var(--sg-lunch-bg)', color: 'var(--sg-lunch-fg)' } : peak ? { background: 'var(--sg-peak-bg)', color: 'var(--sg-peak-fg)' } : { color: 'var(--sg-text-2)' }),
                       }}
                     >
                       <span>{t}</span>
@@ -740,10 +729,10 @@ export const ShiftGridPage: React.FC = () => {
 
               {/* Filas por persona */}
               {officeStaff.map((p) => (
-                <div key={p.id} style={{ display: 'grid', gridTemplateColumns: gridCols, borderBottom: '1px solid #eef2f7', alignItems: 'center' }}>
+                <div key={p.id} style={{ display: 'grid', gridTemplateColumns: gridCols, borderBottom: '1px solid var(--sg-line)', alignItems: 'center' }}>
                   <div className="flex flex-col gap-0.5 min-w-0" style={{ padding: '8px 14px' }}>
                     <span style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.nombre}</span>
-                    <span style={{ fontSize: 12, color: '#5a6b82', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <span style={{ fontSize: 12, color: 'var(--sg-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {p.cargo} · {p.modalidad}
                     </span>
                   </div>
@@ -755,7 +744,7 @@ export const ShiftGridPage: React.FC = () => {
                     const isSel = sel?.pid === p.id && sel.t === t;
                     const label = `${p.nombre}, ${t}: ${c.label}${manual ? ' (cambiado a mano)' : ''}. ${canEdit ? 'Toca para cambiar.' : ''}`;
                     return (
-                      <div key={t} style={{ padding: '4px 2px', display: 'flex', height: 52, boxSizing: 'border-box', background: isLunchSlot(t) ? '#fffaf0' : undefined }}>
+                      <div key={t} style={{ padding: '4px 2px', display: 'flex', height: 52, boxSizing: 'border-box', background: isLunchSlot(t) ? 'var(--sg-lunch-col)' : undefined }}>
                         <button
                           onClick={() => openCell(p, t)}
                           aria-label={label}
@@ -771,7 +760,7 @@ export const ShiftGridPage: React.FC = () => {
                         >
                           {c.code}
                           {manual && (
-                            <span aria-hidden="true" style={{ position: 'absolute', top: 3, right: 3, width: 7, height: 7, borderRadius: 4, background: CYAN, boxShadow: '0 0 0 1.5px #fff' }} />
+                            <span aria-hidden="true" style={{ position: 'absolute', top: 3, right: 3, width: 7, height: 7, borderRadius: 4, background: CYAN, boxShadow: '0 0 0 1.5px var(--sg-surface)' }} />
                           )}
                         </button>
                       </div>
@@ -782,11 +771,11 @@ export const ShiftGridPage: React.FC = () => {
 
               {/* Fila de cobertura (necesarios = Erlang C) */}
               <div
-                style={{ display: 'grid', gridTemplateColumns: gridCols, background: '#f6f8fb', borderTop: '2px solid #d6dfeb', alignItems: 'stretch', ...ringStyle(3) }}
+                style={{ display: 'grid', gridTemplateColumns: gridCols, background: 'var(--sg-subtle)', borderTop: '2px solid var(--sg-border)', alignItems: 'stretch', ...ringStyle(3) }}
               >
                 <div className="flex flex-col gap-0.5" style={{ padding: '10px 14px' }}>
                   <span style={{ fontSize: 13, fontWeight: 700 }}>Cobertura</span>
-                  <span style={{ fontSize: 12, color: '#5a6b82' }}>atendiendo / necesarios</span>
+                  <span style={{ fontSize: 12, color: 'var(--sg-muted)' }}>atendiendo / necesarios</span>
                 </div>
                 {coverage.map((v) => {
                   const k = COV[v.kind];
@@ -813,11 +802,11 @@ export const ShiftGridPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-x-4 gap-y-2" style={{ padding: '12px 18px', borderTop: '1px solid #e3e9f1', fontSize: 12, color: '#3d4c63' }}>
+          <div className="flex flex-wrap gap-x-4 gap-y-2" style={{ padding: '12px 18px', borderTop: '1px solid var(--sg-line)', fontSize: 12, color: 'var(--sg-text-2)' }}>
             <Swatch bg="#dcf2e3" border="#5fb37c">Suficiente</Swatch>
             <Swatch bg="#ffe4cc" border="#e07a2e">Falta gente: se forma fila</Swatch>
             <Swatch bg="#9b1c1c" border="#9b1c1c">Oficina sin nadie atendiendo</Swatch>
-            <span style={{ color: '#5a6b82' }}>«Necesarios» los calcula el motor (Erlang C) según la demanda prevista de cada franja.</span>
+            <span style={{ color: 'var(--sg-muted)' }}>«Necesarios» los calcula el motor (Erlang C) según la demanda prevista de cada franja.</span>
           </div>
         </div>
 
@@ -830,29 +819,29 @@ export const ShiftGridPage: React.FC = () => {
           {!sel || !person ? (
             <div className="flex flex-col gap-2.5">
               <span style={{ fontSize: 14, fontWeight: 700 }}>5. Corrige con un clic</span>
-              <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55, color: '#3d4c63' }}>
+              <p style={{ margin: 0, fontSize: 14, lineHeight: 1.55, color: 'var(--sg-text-2)' }}>
                 Toca cualquier casilla de la malla. Aquí verás qué está haciendo esa persona, las opciones para cambiarlo y{' '}
                 <strong>cómo queda la oficina antes de confirmar</strong>.
               </p>
-              <div className="flex flex-col gap-1.5" style={{ background: '#e8f6fc', borderRadius: 10, padding: '12px 14px' }}>
-                <span style={{ fontSize: 13, fontWeight: 600, color: '#0b4a66' }}>Sugerencia del motor</span>
-                <span style={{ fontSize: 13, lineHeight: 1.5, color: '#0f3347' }}>{suggestion}</span>
+              <div className="flex flex-col gap-1.5" style={{ background: 'var(--sg-info-bg)', borderRadius: 10, padding: '12px 14px' }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--sg-info-fg)' }}>Sugerencia del motor</span>
+                <span style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--sg-info-fg)' }}>{suggestion}</span>
               </div>
             </div>
           ) : (
             <div className="flex flex-col gap-3.5">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex flex-col gap-0.5">
-                  <span style={{ fontSize: 12, color: '#5a6b82', fontWeight: 500 }}>Editando casilla</span>
+                  <span style={{ fontSize: 12, color: 'var(--sg-muted)', fontWeight: 500 }}>Editando casilla</span>
                   <span style={{ fontSize: 17, fontWeight: 700 }}>{person.nombre}</span>
-                  <span style={{ fontSize: 13, color: '#3d4c63' }}>
+                  <span style={{ fontSize: 13, color: 'var(--sg-text-2)' }}>
                     De {selT} a {addHalfHour(selT)} · ahora: <strong>{ST[cur].label}</strong>
                   </span>
                 </div>
                 <button
                   onClick={closeEditor}
                   aria-label="Cerrar editor"
-                  style={{ font: 'inherit', width: 44, height: 44, flex: '0 0 auto', borderRadius: 10, border: '1px solid #d6dfeb', background: '#fff', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3d4c63' }}
+                  style={{ font: 'inherit', width: 44, height: 44, flex: '0 0 auto', borderRadius: 10, border: '1px solid var(--sg-border)', background: 'var(--sg-surface)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--sg-text-2)' }}
                 >
                   <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                     <path d="M3 3l10 10M13 3L3 13" />
@@ -865,14 +854,14 @@ export const ShiftGridPage: React.FC = () => {
                   <span>Esta persona está <strong>ausente</strong>. Las ausencias no se cambian desde la malla: se registran o se quitan en la pantalla de Ausencias.</span>
                   <button
                     onClick={() => navigate('/ausencias')}
-                    style={{ ...btnBase, fontSize: 14, fontWeight: 600, border: '1px solid #e19995', background: '#fff', color: '#8a1414' }}
+                    style={{ ...btnBase, fontSize: 14, fontWeight: 600, border: '1px solid #e19995', background: 'var(--sg-surface)', color: 'var(--sg-danger-text)' }}
                   >
                     Ir a Ausencias
                   </button>
                 </div>
               ) : (
                 <>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: '#3d4c63' }}>¿Qué debería hacer en esta media hora?</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--sg-text-2)' }}>¿Qué debería hacer en esta media hora?</span>
                   <div role="radiogroup" aria-label="Nuevo estado" className="flex flex-col gap-1.5">
                     {ORDER.filter((k) => k !== 'ausente').map((k) => {
                       const on = k === pend;
@@ -883,9 +872,9 @@ export const ShiftGridPage: React.FC = () => {
                           aria-checked={on}
                           onClick={() => setPending(k)}
                           style={{
-                            font: 'inherit', display: 'flex', alignItems: 'center', gap: 10, minHeight: 52, padding: '8px 10px', borderRadius: 10, cursor: 'pointer', color: '#0f1b2d',
-                            background: on ? '#eef6fb' : '#fff',
-                            border: on ? '2px solid #1f6496' : '1px solid #d6dfeb',
+                            font: 'inherit', display: 'flex', alignItems: 'center', gap: 10, minHeight: 52, padding: '8px 10px', borderRadius: 10, cursor: 'pointer', color: 'var(--sg-text)',
+                            background: on ? 'var(--sg-info-bg)' : 'var(--sg-surface)',
+                            border: on ? '2px solid #1f6496' : '1px solid var(--sg-border)',
                           }}
                         >
                           <span aria-hidden="true" style={chipStyle(k, 32)}>
@@ -893,7 +882,7 @@ export const ShiftGridPage: React.FC = () => {
                           </span>
                           <span className="flex flex-col gap-px text-left">
                             <span style={{ fontSize: 14, fontWeight: 600 }}>{ST[k].label}</span>
-                            <span style={{ fontSize: 12, color: '#5a6b82', lineHeight: 1.35 }}>{ST[k].short}</span>
+                            <span style={{ fontSize: 12, color: 'var(--sg-muted)', lineHeight: 1.35 }}>{ST[k].short}</span>
                           </span>
                         </button>
                       );
@@ -930,7 +919,7 @@ export const ShiftGridPage: React.FC = () => {
                   <div className="flex gap-2.5">
                     <button
                       onClick={closeEditor}
-                      style={{ ...btnBase, flex: 1, fontSize: 14, fontWeight: 600, border: '1px solid #b9c7da', background: '#fff', color: '#0f1b2d' }}
+                      style={{ ...btnBase, flex: 1, fontSize: 14, fontWeight: 600, border: '1px solid var(--sg-border-2)', background: 'var(--sg-surface)', color: 'var(--sg-text)' }}
                     >
                       Cancelar
                     </button>
@@ -940,7 +929,7 @@ export const ShiftGridPage: React.FC = () => {
                       style={{
                         ...btnBase, flex: 1.4, fontSize: 14, fontWeight: 600, border: 0,
                         ...(noChange || applying
-                          ? { background: '#e3e8ef', color: '#5a6b82', cursor: 'not-allowed' }
+                          ? { background: 'var(--sg-subtle-2)', color: 'var(--sg-muted)', cursor: 'not-allowed' }
                           : { background: '#1f6496', color: '#fff' }),
                       }}
                     >
@@ -973,13 +962,13 @@ const Kpi: React.FC<{ label: string; value: React.ReactNode; hint: string; alert
       borderRadius: 16,
       padding: '14px 16px',
       ...(alert
-        ? { background: '#fff4ea', border: '2px solid #e07a2e', color: '#7a2b05' }
-        : { background: '#fff', border: '1px solid #d6dfeb' }),
+        ? { background: 'var(--sg-warn-bg)', border: '2px solid #e07a2e', color: 'var(--sg-warn-fg)' }
+        : { background: 'var(--sg-surface)', border: '1px solid var(--sg-border)' }),
     }}
   >
-    <span style={{ fontSize: 12, fontWeight: 500, color: '#5a6b82' }}>{label}</span>
+    <span style={{ fontSize: 12, fontWeight: 500, color: 'var(--sg-muted)' }}>{label}</span>
     <span style={{ fontSize: 26, fontWeight: 700, fontFamily: FONT_MONO }}>{value}</span>
-    <span style={{ fontSize: 12, color: '#5a6b82' }}>{hint}</span>
+    <span style={{ fontSize: 12, color: 'var(--sg-muted)' }}>{hint}</span>
   </div>
 );
 
