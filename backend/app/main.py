@@ -6,6 +6,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,6 +63,10 @@ async def lifespan(_app: FastAPI):
     if settings.seed_on_startup:
         with SessionLocal() as db:
             bootstrap_database(db)
+
+    if os.environ.get("VERCEL"):
+        yield
+        return
 
     task = asyncio.create_task(_realtime_loop())
     try:

@@ -6,6 +6,7 @@ import asyncio
 from collections import Counter
 from datetime import datetime, timezone
 import json
+import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
@@ -15,11 +16,14 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.core.auth import decode_access_token, get_current_user, require_roles
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.engines.forecast import get_office_day_forecast
+from app.engines.optimizer import weekday_from_date
 from app.etl.digiturno_source import get_digiturno_source
 from app.etl.excel_importer import OPERATING_SLOTS_ALL
 from app.models.entities import (
+    AlertModel,
+    DayPlanModel,
     HistoricalSummaryModel,
     HistoricalTurnModel,
     OfficeModel,
@@ -38,7 +42,7 @@ from app.schemas.api import (
     UserBehaviorOut,
     UserOut,
 )
-from app.services.operations import record_audit
+from app.services.operations import record_audit, serialize_alert
 
 router = APIRouter()
 
@@ -289,6 +293,39 @@ async def realtime_sse_stream(
     _user: Annotated[UserOut, Depends(get_current_user)],
 ):
     """Flujo Server-Sent Events (SSE) con métricas en vivo y alertas."""
+    if os.environ.get("VERCEL"):
+        async def vercel_snapshot_generator():
+            settings = get_settings()
+            with SessionLocal() as db:
+                rules = db.get(SystemRulesModel, 1)
+                mode = rules.source_mode if rules else settings.digiturno_source_mode
+                plan = db.execute(select(DayPlanModel).order_by(DayPlanModel.updated_at.desc())).scalars().first()
+                is_fortnight = plan.is_fortnight if plan else True
+                plan_fecha = plan.fecha if plan else settings.default_plan_date
+                dow = weekday_from_date(plan_fecha)
+                source = get_digiturno_source(mode)
+                metrics = source.get_live_metrics(db, slot="10:00", day_of_week=dow, is_fortnight=is_fortnight)
+                alerts = db.execute(
+                    select(AlertModel).where(AlertModel.plan_fecha == plan_fecha, AlertModel.leida.is_(False))
+                ).scalars().all()
+                payload = {
+                    "type": "metrics_update",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "currentSlotTime": "10:00",
+                    "liveMetrics": [m.model_dump(by_alias=True) for m in metrics],
+                    "alerts": [serialize_alert(a).model_dump(by_alias=True) for a in alerts],
+                }
+            yield f"retry: 10000\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            vercel_snapshot_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     queue = broadcaster.subscribe()
 
     async def event_generator():

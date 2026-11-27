@@ -1,0 +1,9 @@
+fastapi>=0.115.0
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+sqlalchemy>=2.0.36
+openpyxl>=3.1.5
+simpy>=4.1.1
+pulp>=2.9.0,<3.0.0
+pyjwt>=2.10.0
+python-multipart>=0.0.18

@@ -1,8 +1,17 @@
 """Configuración centralizada del backend mediante variables de entorno."""
 
 from functools import lru_cache
+import os
 from pathlib import Path
+import tempfile
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _default_database_url() -> str:
+    if os.environ.get("VERCEL"):
+        db_file = (Path(tempfile.gettempdir()) / "surtigas_vercel.db").as_posix()
+        return f"sqlite:///{db_file}"
+    return "sqlite:///./surtigas_local.db"
 
 
 class Settings(BaseSettings):
@@ -17,7 +26,7 @@ class Settings(BaseSettings):
     app_name: str = "Surtigas OptiTurnos API"
     app_version: str = "1.0.0"
 
-    database_url: str = "sqlite:///./surtigas_local.db"
+    database_url: str = _default_database_url()
 
     jwt_secret_key: str = "dev-surtigas-secret-change-in-production-2026"
     jwt_algorithm: str = "HS256"
