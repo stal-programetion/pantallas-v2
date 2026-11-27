@@ -1,4 +1,41 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: surtigas-db-dev
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-surtigas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-surtigas_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-surtigas_turnos}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-surtigas} -d ${POSTGRES_DB:-surtigas_turnos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend-dev:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: surtigas-backend-dev
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-surtigas}:${POSTGRES_PASSWORD:-surtigas_dev_password}@db:5432/${POSTGRES_DB:-surtigas_turnos}
+      AUTH_REQUIRED: "false"
+      AUTH_DEMO_ROLE_SWITCH: "true"
+      CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+      SEED_ON_STARTUP: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
   pantallas-dev:
     build:
       context: .
@@ -11,3 +48,9 @@ services:
       - /app/node_modules
     environment:
       - CHOKIDAR_USEPOLLING=true
+      - VITE_API_BASE_URL=http://localhost:8000
+    depends_on:
+      - backend-dev
+
+volumes:
+  pgdata_dev:

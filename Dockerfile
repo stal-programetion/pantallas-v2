@@ -14,7 +14,8 @@ RUN npm ci
 # Copy project source code
 COPY . .
 
-# Build production assets
+# Build production assets (API proxied via Nginx /api)
+ENV VITE_API_BASE_URL=""
 RUN npm run build
 
 # Stage 2: Serve with Nginx

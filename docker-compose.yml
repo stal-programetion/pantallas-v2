@@ -1,4 +1,46 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: surtigas-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-surtigas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-surtigas_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-surtigas_turnos}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-surtigas} -d ${POSTGRES_DB:-surtigas_turnos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: surtigas-backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-surtigas}:${POSTGRES_PASSWORD:-surtigas_dev_password}@db:5432/${POSTGRES_DB:-surtigas_turnos}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-cambia-esta-clave-secreta-en-produccion-32-chars}
+      AUTH_REQUIRED: ${AUTH_REQUIRED:-false}
+      AUTH_DEMO_ROLE_SWITCH: ${AUTH_DEMO_ROLE_SWITCH:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://localhost:5173,http://127.0.0.1:8080}
+      DIGITURNO_SOURCE_MODE: ${DIGITURNO_SOURCE_MODE:-mock}
+      REALTIME_INTERVAL_SECONDS: ${REALTIME_INTERVAL_SECONDS:-5}
+      SEED_ON_STARTUP: ${SEED_ON_STARTUP:-true}
+      EXCEL_DATA_PATH: /app/seed_data/Historicos Turnos MAY2026.xlsx
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/seed:/app/seed_data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   pantallas:
     build:
       context: .
@@ -6,4 +48,9 @@ services:
     container_name: pantallas-v2
     ports:
       - "${PORT:-8080}:80"
+    depends_on:
+      - backend
     restart: unless-stopped
+
+volumes:
+  pgdata:
