@@ -91,7 +91,7 @@ class DayPlanModel(Base):
 class RedistributionModel(Base):
     __tablename__ = "redistributions"
 
-    id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
     plan_fecha: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     colaborador_id: Mapped[str] = mapped_column(String(64), nullable=False)
     colaborador_nombre: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -207,7 +207,7 @@ class AuditLogModel(Base):
     actor_rol: Mapped[str] = mapped_column(String(32), nullable=False)
     action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
-    entity_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(128), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     payload_before: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     payload_after: Mapped[dict | None] = mapped_column(JSON, nullable=True)

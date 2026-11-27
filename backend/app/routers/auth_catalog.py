@@ -17,7 +17,8 @@ from app.core.auth import (
 )
 from app.core.privacy import mask_document_for_role
 from app.database import get_db
-from app.models.entities import OfficeModel, StaffModel, SystemRulesModel
+from app.engines.optimizer import weekday_from_date
+from app.models.entities import DayPlanModel, OfficeModel, StaffModel, SystemRulesModel
 from app.schemas.api import (
     AuthTokenOut,
     BusinessHoursOut,
@@ -33,7 +34,7 @@ from app.schemas.api import (
     SystemRulesUpdateIn,
     UserOut,
 )
-from app.services.operations import record_audit
+from app.services.operations import record_audit, regenerate_full_day_state
 
 router = APIRouter()
 
@@ -123,13 +124,20 @@ def get_me(user: Annotated[UserOut, Depends(get_current_user)]) -> UserOut:
 
 
 @router.get("/offices", response_model=list[OfficeOut])
-def list_offices(db: Session = Depends(get_db)) -> list[OfficeOut]:
+def list_offices(
+    _user: Annotated[UserOut, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> list[OfficeOut]:
     rows = db.execute(select(OfficeModel).order_by(OfficeModel.departamento, OfficeModel.nombre)).scalars().all()
     return [_serialize_office(o) for o in rows]
 
 
 @router.get("/offices/{office_id}", response_model=OfficeOut)
-def get_office(office_id: str, db: Session = Depends(get_db)) -> OfficeOut:
+def get_office(
+    office_id: str,
+    _user: Annotated[UserOut, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> OfficeOut:
     off = db.get(OfficeModel, office_id)
     if not off:
         raise HTTPException(status_code=404, detail=f"Oficina {office_id} no encontrada")
@@ -189,9 +197,7 @@ def list_staff(
     return [_serialize_staff(s, user.rol) for s in rows]
 
 
-@router.get("/settings/rules", response_model=SystemRulesOut)
-def get_rules(db: Session = Depends(get_db)) -> SystemRulesOut:
-    rules = db.get(SystemRulesModel, 1)
+def _serialize_rules(rules: SystemRulesModel | None) -> SystemRulesOut:
     if not rules:
         return SystemRulesOut(
             target_sla=0.80,
@@ -213,6 +219,14 @@ def get_rules(db: Session = Depends(get_db)) -> SystemRulesOut:
     )
 
 
+@router.get("/settings/rules", response_model=SystemRulesOut)
+def get_rules(
+    _user: Annotated[UserOut, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> SystemRulesOut:
+    return _serialize_rules(db.get(SystemRulesModel, 1))
+
+
 @router.put("/settings/rules", response_model=SystemRulesOut)
 def update_rules(
     body: SystemRulesUpdateIn,
@@ -223,7 +237,12 @@ def update_rules(
     if not rules:
         rules = SystemRulesModel(id=1)
         db.add(rules)
-    before = {"targetSla": rules.target_sla, "maxWaitMin": rules.max_wait_min, "maxPresencialKm": rules.max_presencial_km}
+    before = {
+        "targetSla": rules.target_sla,
+        "maxWaitMin": rules.max_wait_min,
+        "maxPresencialKm": rules.max_presencial_km,
+        "lunchDurationMin": rules.lunch_duration_min,
+    }
     if body.target_sla is not None:
         rules.target_sla = body.target_sla
     if body.max_wait_min is not None:
@@ -237,16 +256,32 @@ def update_rules(
     if body.min_agents_open_office is not None:
         rules.min_agents_open_office = body.min_agents_open_office
 
+    db.commit()
+
+    latest_plan = db.execute(select(DayPlanModel).order_by(DayPlanModel.updated_at.desc())).scalars().first()
+    if latest_plan:
+        regenerate_full_day_state(
+            db,
+            fecha=latest_plan.fecha,
+            day_of_week=weekday_from_date(latest_plan.fecha),
+            is_fortnight=latest_plan.is_fortnight,
+        )
+
     record_audit(
         db,
         user,
         action="RULES_UPDATED",
         entity_type="system_rules",
         entity_id="1",
-        summary="Actualización de reglas laborales y umbrales SLA.",
+        summary="Actualización de reglas laborales y umbrales SLA con recálculo de malla activa.",
         before=before,
-        after={"targetSla": rules.target_sla, "maxWaitMin": rules.max_wait_min, "maxPresencialKm": rules.max_presencial_km},
+        after={
+            "targetSla": rules.target_sla,
+            "maxWaitMin": rules.max_wait_min,
+            "maxPresencialKm": rules.max_presencial_km,
+            "lunchDurationMin": rules.lunch_duration_min,
+        },
     )
     db.commit()
     db.refresh(rules)
-    return get_rules(db)
+    return _serialize_rules(rules)

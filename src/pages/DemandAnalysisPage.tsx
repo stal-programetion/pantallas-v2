@@ -224,8 +224,8 @@ export const DemandAnalysisPage: React.FC = () => {
                   }}
                 />
                 <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
-                <Bar dataKey="Día Estándar" fill="#2D79AD" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Día de Quincena (+32%)" fill="#8BBF3F" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Día Estándar" fill="#2D79AD" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                <Bar dataKey="Día de Quincena (+32%)" fill="#8BBF3F" radius={[4, 4, 0, 0]} isAnimationActive={false} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -264,6 +264,7 @@ export const DemandAnalysisPage: React.FC = () => {
                   stroke="#1F2B6B"
                   strokeWidth={2.5}
                   dot={{ r: 3 }}
+                  isAnimationActive={false}
                 />
                 <Line
                   type="monotone"
@@ -271,6 +272,7 @@ export const DemandAnalysisPage: React.FC = () => {
                   stroke="#8BBF3F"
                   strokeWidth={2.5}
                   dot={{ r: 3 }}
+                  isAnimationActive={false}
                 />
               </LineChart>
             </ResponsiveContainer>

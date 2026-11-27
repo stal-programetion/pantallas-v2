@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
@@ -100,7 +100,7 @@ const STEPS = [
   },
   {
     title: 'Lee la malla como un horario',
-    text: 'Cada fila es una persona y cada columna es media hora, de 08:00 a 16:00. Lee de izquierda a derecha para ver el día de alguien; lee de arriba a abajo para ver quién está en una hora concreta.',
+    text: 'Cada fila es una persona y cada columna es media hora, de 07:00 a 16:00. Lee de izquierda a derecha para ver el día de alguien; lee de arriba a abajo para ver quién está en una hora concreta.',
   },
   {
     title: 'Revisa la fila de cobertura',
@@ -182,12 +182,28 @@ export const ShiftGridPage: React.FC = () => {
     operatingSlots,
     requiredAgentsByOffice,
     isLoading,
+    init,
     updateSlot,
     resetPlanToProposal,
     showToast,
   } = useAppStore();
   const { canEditShifts } = useAuthStore();
   const canEdit = canEditShifts();
+  const planExcelInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportPlanExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      await apiTurnosService.importDayPlanExcel(selectedDate, file);
+      await init();
+      showToast('Malla de turnos importada desde Excel y registrada en auditoría.', 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error importando malla Excel', 'error');
+    } finally {
+      e.target.value = '';
+    }
+  };
 
   const [pickedOfficeId, setPickedOfficeId] = useState<string | null>(null);
   const [sel, setSel] = useState<{ pid: string; t: string } | null>(null);
@@ -467,6 +483,29 @@ export const ShiftGridPage: React.FC = () => {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
+          <input
+            ref={planExcelInputRef}
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={handleImportPlanExcel}
+          />
+          <button
+            onClick={() => planExcelInputRef.current?.click()}
+            disabled={!canEdit}
+            style={{
+              ...btnBase,
+              fontSize: 14,
+              fontWeight: 600,
+              padding: '0 16px',
+              border: '1px solid #b9c7da',
+              background: '#fff',
+              color: canEdit ? '#0f1b2d' : '#8b97a8',
+              cursor: canEdit ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Importar Excel
+          </button>
           <button
             onClick={() => apiDownload(`/plans/${selectedDate}/export?format=xlsx`, `Plan_Turnos_Surtigas_${selectedDate}.xlsx`)}
             style={{ ...btnBase, fontSize: 14, fontWeight: 600, padding: '0 16px', border: '1px solid #b9c7da', background: '#fff', color: '#0f1b2d' }}

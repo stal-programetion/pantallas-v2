@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from app.config import get_settings
 from app.database import Base, SessionLocal, engine
+from app.engines.optimizer import weekday_from_date
 from app.etl.digiturno_source import get_digiturno_source
 from app.models.entities import AlertModel, DayPlanModel, SystemRulesModel
 from app.realtime.manager import broadcaster
@@ -34,9 +35,13 @@ async def _realtime_loop() -> None:
                 mode = rules.source_mode if rules else settings.digiturno_source_mode
                 plan = db.execute(select(DayPlanModel).order_by(DayPlanModel.updated_at.desc())).scalars().first()
                 is_fortnight = plan.is_fortnight if plan else True
+                plan_fecha = plan.fecha if plan else settings.default_plan_date
+                dow = weekday_from_date(plan_fecha)
                 source = get_digiturno_source(mode)
-                metrics = source.get_live_metrics(db, slot="10:00", day_of_week=1, is_fortnight=is_fortnight)
-                alerts = db.execute(select(AlertModel).where(AlertModel.leida.is_(False))).scalars().all()
+                metrics = source.get_live_metrics(db, slot="10:00", day_of_week=dow, is_fortnight=is_fortnight)
+                alerts = db.execute(
+                    select(AlertModel).where(AlertModel.plan_fecha == plan_fecha, AlertModel.leida.is_(False))
+                ).scalars().all()
                 await broadcaster.broadcast(
                     "metrics_update",
                     {

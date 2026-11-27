@@ -151,7 +151,7 @@ export const OfficeDetailPage: React.FC = () => {
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
           <span className="text-slate-500 font-medium block">Clientes en Fila</span>
           <div className="text-2xl font-extrabold text-slate-900 mt-1 flex items-baseline gap-1">
-            <span>{metrics?.clientesEnFila || 4}</span>
+            <span>{metrics?.clientesEnFila ?? 0}</span>
             <span className="text-[11px] text-slate-400 font-normal">tickets activos</span>
           </div>
         </div>
@@ -159,7 +159,7 @@ export const OfficeDetailPage: React.FC = () => {
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
           <span className="text-slate-500 font-medium block">Tiempo Medio de Espera</span>
           <div className="text-2xl font-extrabold text-orange-600 mt-1 flex items-baseline gap-1">
-            <span>{Math.round(metrics?.esperaPromedioMin || 6.2)} min</span>
+            <span>{Math.round(metrics?.esperaPromedioMin ?? 0)} min</span>
             <span className="text-[11px] text-slate-400 font-normal">meta &le; 10 min</span>
           </div>
         </div>
@@ -168,7 +168,7 @@ export const OfficeDetailPage: React.FC = () => {
           <span className="text-slate-500 font-medium block">Personal en Ventanilla</span>
           <div className="text-2xl font-extrabold text-blue-800 mt-1 flex items-baseline gap-1">
             <span>
-              {metrics?.agentesActivos || office.capacidadPuestos} / {office.capacidadPuestos}
+              {metrics?.agentesActivos ?? office.capacidadPuestos} / {office.capacidadPuestos}
             </span>
             <span className="text-[11px] text-slate-400 font-normal">puestos</span>
           </div>
@@ -257,8 +257,8 @@ export const OfficeDetailPage: React.FC = () => {
                       fontSize: '12px',
                     }}
                   />
-                  <Bar dataKey="Atendidos" fill="#1F2B6B" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="EnEspera" fill="#8BBF3F" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="Atendidos" fill="#1F2B6B" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                  <Bar dataKey="EnEspera" fill="#8BBF3F" radius={[4, 4, 0, 0]} isAnimationActive={false} />
                 </BarChart>
               </ResponsiveContainer>
             </div>

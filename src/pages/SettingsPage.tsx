@@ -234,7 +234,7 @@ export const SettingsPage: React.FC = () => {
                     Datos Simulados Reproducibles (Piloto TRL 6)
                   </div>
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    Generador pseudo-aleatorio con semilla fija Mulberry32 y 3 meses de histórico verosímil.
+                    Motor SimulatedLiveSource calibrado con el histórico real de Digiturno.
                   </p>
                 </div>
               </label>
@@ -565,7 +565,7 @@ export const SettingsPage: React.FC = () => {
                 <input
                   type="number"
                   min="1"
-                  max="10"
+                  max="25"
                   value={editingOffice.capacidadPuestos}
                   onChange={(e) =>
                     setEditingOffice({

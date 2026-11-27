@@ -248,6 +248,7 @@ def import_digiturno_excel(
     invalid_rows = 0
     cleaned_service_outliers = 0
     recovered_dates = 0
+    post_closing_turns = 0
     date_min: str | None = None
     date_max: str | None = None
     offices_seen: set[str] = set()
@@ -323,6 +324,8 @@ def import_digiturno_excel(
         # ISO weekday: Lunes=1 .. Domingo=7 (convertir Domingo a 0 como frontend)
         iso_wd = dt_wait.isoweekday()
         dia_semana = 0 if iso_wd == 7 else iso_wd
+        if f"{dt_wait.hour:02d}:{(0 if dt_wait.minute < 30 else 30):02d}" > "16:00":
+            post_closing_turns += 1
         franja = assign_slot_30m(dt_wait)
 
         existing_ids.add(composite_id)
@@ -371,6 +374,10 @@ def import_digiturno_excel(
     if recovered_dates > 0:
         warnings.append(
             f"{recovered_dates} turnos sin TiempoInicioEspera recuperados con TiempoInicioAtencion."
+        )
+    if post_closing_turns > 0:
+        warnings.append(
+            f"{post_closing_turns} turnos posteriores a 16:30 consolidados en la franja de cierre 16:00."
         )
     if cleaned_service_outliers > 0:
         warnings.append(

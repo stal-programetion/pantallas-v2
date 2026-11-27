@@ -82,27 +82,28 @@ def generate_redistributions_for_plan(
     deficits = sorted([b for b in balances if b["balance"] < 0], key=lambda x: x["balance"])
     surpluses = sorted([b for b in balances if b["balance"] >= 1], key=lambda x: x["balance"], reverse=True)
 
-    # Si no hay superávit estricto, habilitar sedes con >=2 asesores y mayor holgura de SLA como donantes virtuales
-    if not surpluses:
-        surpluses = sorted(
-            [
-                {**b, "balance": 1}
-                for b in balances
-                if b["assigned"] >= 2 and b["sla"] >= 0.75
-            ],
-            key=lambda x: x["sla"],
-            reverse=True,
-        )
-    if not surpluses:
-        surpluses = sorted(
+    # Complementar con sedes de >=2 asesores y mejor holgura de SLA como donantes virtuales/cercanos
+    target_donors = min(4, len(deficits))
+    current_capacity = sum(s["balance"] for s in surpluses)
+    if current_capacity < target_donors:
+        already_donor_ids = {s["office"].id for s in surpluses}
+        top_deficit_ids = {d["office"].id for d in deficits[:2]}
+        extra_candidates = sorted(
             [
                 {**b, "balance": 1}
                 for b in balances
                 if b["assigned"] >= 2
+                and b["office"].id not in already_donor_ids
+                and b["office"].id not in top_deficit_ids
             ],
-            key=lambda x: x["sla"],
+            key=lambda x: (x["sla"], -x["lambda"]),
             reverse=True,
-        )[:4]
+        )
+        for cand in extra_candidates:
+            if current_capacity >= target_donors:
+                break
+            surpluses.append(cand)
+            current_capacity += 1
 
     recommendations: list[dict[str, Any]] = []
     used_staff_ids: set[str] = set()
@@ -188,7 +189,7 @@ def generate_redistributions_for_plan(
 
         recommendations.append(
             {
-                "id": f"redist-{def_off.id}-{sur_off.id}-{staff_member.id}",
+                "id": f"redist-{plan_fecha}-{def_off.id}-{sur_off.id}-{staff_member.id}",
                 "plan_fecha": plan_fecha,
                 "colaborador_id": staff_member.id,
                 "colaborador_nombre": staff_member.nombre,

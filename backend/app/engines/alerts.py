@@ -53,7 +53,7 @@ def evaluate_alerts_for_plan(
         if not has_reinforcement:
             alerts.append(
                 {
-                    "id": f"alt-abs-{ab.id}",
+                    "id": f"alt-{plan_fecha}-abs-{ab.id}",
                     "plan_fecha": plan_fecha,
                     "tipo": "ausencia_sin_cubrir",
                     "severidad": "critica" if off.capacidad_puestos <= 3 else "advertencia",
@@ -94,7 +94,7 @@ def evaluate_alerts_for_plan(
         if ev.nivel_servicio < 0.70:
             alerts.append(
                 {
-                    "id": f"alt-sla-{off.id}-{current_slot}",
+                    "id": f"alt-{plan_fecha}-sla-{off.id}-{current_slot}",
                     "plan_fecha": plan_fecha,
                     "tipo": "sla_en_riesgo",
                     "severidad": "critica",
@@ -115,7 +115,7 @@ def evaluate_alerts_for_plan(
         elif ev.nivel_servicio < sla_goal:
             alerts.append(
                 {
-                    "id": f"alt-sla-{off.id}-{current_slot}",
+                    "id": f"alt-{plan_fecha}-sla-{off.id}-{current_slot}",
                     "plan_fecha": plan_fecha,
                     "tipo": "sla_en_riesgo",
                     "severidad": "advertencia",
@@ -151,7 +151,7 @@ def evaluate_alerts_for_plan(
             if next_fc.es_pico and ev_next.nivel_servicio < sla_goal:
                 alerts.append(
                     {
-                        "id": f"alt-peak-{off.id}-{next_slot}",
+                        "id": f"alt-{plan_fecha}-peak-{off.id}-{next_slot}",
                         "plan_fecha": plan_fecha,
                         "tipo": "pico_inminente",
                         "severidad": "advertencia",
@@ -182,7 +182,7 @@ def evaluate_alerts_for_plan(
             if active_lunch == 0 and off.estado == "abierta":
                 alerts.append(
                     {
-                        "id": f"alt-lunch-{off.id}-{l_slot}",
+                        "id": f"alt-{plan_fecha}-lunch-{off.id}-{l_slot}",
                         "plan_fecha": plan_fecha,
                         "tipo": "almuerzo_descubierto",
                         "severidad": "critica",

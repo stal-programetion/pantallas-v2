@@ -6,7 +6,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.auth import require_roles
+from app.core.auth import get_current_user, require_roles
 from app.database import get_db
 from app.engines.forecast import (
     build_fortnight_comparison,
@@ -16,8 +16,10 @@ from app.engines.forecast import (
     compute_required_agents_matrix,
     get_office_day_forecast,
 )
+from app.engines.optimizer import weekday_from_date
 from app.engines.simulator import run_what_if_simulation
 from app.etl.excel_importer import OPERATING_SLOTS_ALL
+from app.models.entities import SystemRulesModel
 from app.schemas.api import (
     ApplyScenarioIn,
     DayPlanOut,
@@ -36,6 +38,7 @@ router = APIRouter()
 @router.get("/forecast/office/{office_id}", response_model=list[SlotForecastOut])
 def forecast_office(
     office_id: str,
+    _user: Annotated[UserOut, Depends(get_current_user)],
     day_of_week: int = Query(1, alias="dayOfWeek"),
     is_fortnight: bool = Query(False, alias="isFortnight"),
     db: Session = Depends(get_db),
@@ -46,6 +49,7 @@ def forecast_office(
 @router.get("/forecast/heatmap/{office_id}")
 def forecast_heatmap(
     office_id: str,
+    _user: Annotated[UserOut, Depends(get_current_user)],
     is_fortnight: bool = Query(False, alias="isFortnight"),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -59,6 +63,7 @@ def forecast_heatmap(
 @router.get("/forecast/compare-fortnight/{office_id}")
 def forecast_compare_fortnight(
     office_id: str,
+    _user: Annotated[UserOut, Depends(get_current_user)],
     day_of_week: int = Query(1, alias="dayOfWeek"),
     db: Session = Depends(get_db),
 ) -> list[dict]:
@@ -67,6 +72,7 @@ def forecast_compare_fortnight(
 
 @router.get("/forecast/compare-offices")
 def forecast_compare_offices(
+    _user: Annotated[UserOut, Depends(get_current_user)],
     office_a: str = Query("cartagena-chambacu", alias="officeA"),
     office_b: str = Query("monteria-centro", alias="officeB"),
     day_of_week: int = Query(1, alias="dayOfWeek"),
@@ -78,6 +84,7 @@ def forecast_compare_offices(
 
 @router.get("/forecast/required-agents", response_model=RequiredAgentsOut)
 def forecast_required_agents(
+    _user: Annotated[UserOut, Depends(get_current_user)],
     day_of_week: int = Query(4, alias="dayOfWeek"),
     is_fortnight: bool = Query(True, alias="isFortnight"),
     db: Session = Depends(get_db),
@@ -88,7 +95,8 @@ def forecast_required_agents(
 
 @router.get("/forecast/peaks-summary", response_model=PeaksSummaryOut)
 def forecast_peaks_summary(
-    day_of_week: int = Query(1, alias="dayOfWeek"),
+    _user: Annotated[UserOut, Depends(get_current_user)],
+    day_of_week: int = Query(4, alias="dayOfWeek"),
     is_fortnight: bool = Query(True, alias="isFortnight"),
     db: Session = Depends(get_db),
 ) -> PeaksSummaryOut:
@@ -98,6 +106,7 @@ def forecast_peaks_summary(
 @router.post("/simulation/run", response_model=SimulationResultOut)
 def run_simulation(
     body: SimulationParamsIn,
+    _user: Annotated[UserOut, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ) -> SimulationResultOut:
     return run_what_if_simulation(db, body)
@@ -109,13 +118,26 @@ def apply_scenario(
     user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
     db: Session = Depends(get_db),
 ) -> DayPlanOut:
+    rules = db.get(SystemRulesModel, 1)
+    if rules and body.params.target_sla:
+        rules.target_sla = body.params.target_sla
+        db.commit()
+
     is_fortnight = body.params.demand_multiplier >= 1.15
+    residual_multiplier = round(
+        body.params.demand_multiplier / (1.32 if is_fortnight else 1.0), 3
+    )
     plan, _, _ = regenerate_full_day_state(
         db,
         fecha=body.fecha,
-        day_of_week=1,
+        day_of_week=weekday_from_date(body.fecha),
         is_fortnight=is_fortnight,
         current_slot="10:00",
+        demand_multiplier=residual_multiplier,
+        target_sla_override=body.params.target_sla,
+        additional_absences=body.params.additional_absences,
+        office_id_filter=body.params.office_id_filter,
+        agents_override=body.params.agents_override,
     )
     record_audit(
         db,
@@ -123,8 +145,17 @@ def apply_scenario(
         action="SIMULATION_SCENARIO_APPLIED",
         entity_type="day_plan",
         entity_id=plan.id,
-        summary=f"Escenario What-If convertido en propuesta de plan (demanda x{body.params.demand_multiplier}).",
-        after={"demandMultiplier": body.params.demand_multiplier, "targetSla": body.params.target_sla},
+        summary=(
+            f"Escenario What-If convertido en propuesta de plan "
+            f"(demanda x{body.params.demand_multiplier}, +{body.params.additional_absences} ausencias, "
+            f"SLA meta {round(body.params.target_sla * 100)}%)."
+        ),
+        after={
+            "demandMultiplier": body.params.demand_multiplier,
+            "targetSla": body.params.target_sla,
+            "additionalAbsences": body.params.additional_absences,
+            "officeIdFilter": body.params.office_id_filter,
+        },
     )
     db.commit()
     return serialize_day_plan(plan)

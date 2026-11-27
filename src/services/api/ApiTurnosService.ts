@@ -72,4 +72,13 @@ export class ApiTurnosService implements ITurnosService {
       method: 'POST',
     });
   }
+
+  async importDayPlanExcel(date: string, file: File): Promise<DayPlan> {
+    const form = new FormData();
+    form.append('file', file);
+    return apiFetch<DayPlan>(`/plans/${encodeURIComponent(date)}/import-excel`, {
+      method: 'POST',
+      body: form,
+    });
+  }
 }

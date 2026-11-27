@@ -94,7 +94,7 @@ def upgrade() -> None:
 
     op.create_table(
         "redistributions",
-        sa.Column("id", sa.String(96), primary_key=True),
+        sa.Column("id", sa.String(128), primary_key=True),
         sa.Column("plan_fecha", sa.String(16), nullable=False),
         sa.Column("colaborador_id", sa.String(64), nullable=False),
         sa.Column("colaborador_nombre", sa.String(160), nullable=False),

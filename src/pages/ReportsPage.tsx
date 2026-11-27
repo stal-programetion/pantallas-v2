@@ -31,7 +31,7 @@ export const ReportsPage: React.FC = () => {
 
   const exportCsv = async () => {
     const filename = `Reporte_Turnos_Surtigas_${new Date().toISOString().slice(0, 10)}.csv`;
-    await apiDownload('/reports/export?format=csv', filename);
+    await apiDownload(`/reports/export?format=csv&range=${encodeURIComponent(dateRange)}`, filename);
     showToast('Reporte generado y descargado exitosamente en formato CSV.', 'success');
   };
 
@@ -239,8 +239,12 @@ export const ReportsPage: React.FC = () => {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {offices.map((office) => {
+                const summaryRow = summary?.oficinas.find((row) => row.oficinaId === office.id);
                 const metric = liveMetrics.find((m) => m.oficinaId === office.id);
-                const sla = metric ? Math.round(metric.slaActual * 100) : 80;
+                const sla = Math.round((summaryRow?.slaActual ?? metric?.slaActual ?? 0.8) * 100);
+                const enFila = summaryRow?.clientesEnFila ?? metric?.clientesEnFila ?? 0;
+                const esperaMin = summaryRow?.esperaPromedioMin ?? metric?.esperaPromedioMin ?? 0.0;
+                const estadoSla = summaryRow?.estadoSla ?? metric?.estadoSla ?? 'optimo';
 
                 return (
                   <tr key={office.id} className="hover:bg-slate-50/80">
@@ -257,17 +261,17 @@ export const ReportsPage: React.FC = () => {
                       {office.capacidadPuestos}
                     </td>
                     <td className="p-3.5 font-bold text-slate-900">
-                      {metric?.clientesEnFila || 3}
+                      {enFila}
                     </td>
                     <td className="p-3.5 font-mono text-orange-600 font-bold">
-                      {metric ? metric.esperaPromedioMin.toFixed(1) : '6.0'} min
+                      {esperaMin.toFixed(1)} min
                     </td>
                     <td className="p-3.5 font-extrabold text-blue-900">
                       {sla}%
                     </td>
                     <td className="p-3.5">
                       <TrafficLight
-                        status={metric?.estadoSla || 'optimo'}
+                        status={estadoSla}
                         value={sla}
                         size="sm"
                       />

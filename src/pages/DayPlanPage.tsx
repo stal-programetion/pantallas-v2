@@ -324,7 +324,7 @@ export const DayPlanPage: React.FC = () => {
                   Paso 3: Propuesta Generada por el Motor con Justificaciones Legibles
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  El algoritmo asignó 36 colaboradores garantizando escalonamiento de almuerzos y cumplimiento de la meta CREG del 80%.
+                  El algoritmo asignó {staff.length} colaboradores garantizando escalonamiento de almuerzos y cumplimiento de la meta CREG del 80%.
                 </p>
               </div>
 

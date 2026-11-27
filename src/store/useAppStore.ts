@@ -29,6 +29,12 @@ const DEFAULT_SLOTS = [
   '13:00', '13:30', '14:00', '14:30', '15:00', '15:30', '16:00',
 ];
 
+function weekdayFromDate(fecha: string): number {
+  const d = new Date(`${fecha}T12:00:00`);
+  const day = d.getDay();
+  return day >= 1 && day <= 5 ? day : 1;
+}
+
 let sseSource: EventSource | null = null;
 
 interface AppState {
@@ -140,6 +146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await useAuthStore.getState().initSession();
       const fecha = get().selectedDate;
+      const dow = weekdayFromDate(fecha);
       const isFortnight = get().isFortnight;
       const currentSlot = get().currentSlotTime;
 
@@ -164,10 +171,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         apiDigiturnoService.getLiveMetrics(isFortnight),
         apiMotorService.evaluateAlerts(),
         apiMotorService.getRedistributions(undefined, undefined, { fecha } as DayPlan),
-        apiMotorService.getRequiredAgents(4, isFortnight),
+        apiMotorService.getRequiredAgents(dow, isFortnight),
         apiDigiturnoService.getNetworkLoad(isFortnight, currentSlot),
         apiDigiturnoService.getUserBehavior(),
-        apiMotorService.getPeaksSummary(1, isFortnight),
+        apiMotorService.getPeaksSummary(dow, isFortnight),
         apiCatalogService.getRules(),
       ]);
 
@@ -204,7 +211,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       sseSource = null;
     }
     try {
-      const source = new EventSource(buildApiUrl('/realtime/stream'));
+      const token = useAuthStore.getState().token;
+      const streamPath = token ? `/realtime/stream?token=${encodeURIComponent(token)}` : '/realtime/stream';
+      const source = new EventSource(buildApiUrl(streamPath));
       source.onmessage = (evt) => {
         if (get().isSimulationPaused) return;
         try {
@@ -262,15 +271,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   toggleFortnight: async () => {
     const nextFortnight = !get().isFortnight;
     const fecha = get().selectedDate;
+    const dow = weekdayFromDate(fecha);
     set({ isFortnight: nextFortnight, isLoading: true });
     try {
-      const plan = await apiTurnosService.generateDayPlan(fecha, nextFortnight, 1);
+      const plan = await apiTurnosService.generateDayPlan(fecha, nextFortnight, dow);
       const [alerts, recs, reqMatrix, netLoad, peaks, metrics] = await Promise.all([
         apiMotorService.evaluateAlerts(),
         apiMotorService.getRedistributions(undefined, undefined, plan),
-        apiMotorService.getRequiredAgents(4, nextFortnight),
+        apiMotorService.getRequiredAgents(dow, nextFortnight),
         apiDigiturnoService.getNetworkLoad(nextFortnight, get().currentSlotTime),
-        apiMotorService.getPeaksSummary(1, nextFortnight),
+        apiMotorService.getPeaksSummary(dow, nextFortnight),
         apiDigiturnoService.getLiveMetrics(nextFortnight),
       ]);
 
@@ -327,7 +337,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       const updated = await apiTurnosService.updateSlot(plan.fecha, colaboradorId, franja, {
         estado: newEstado,
       });
-      set({ currentPlan: updated });
+      const [freshAlerts, freshMetrics] = await Promise.all([
+        apiMotorService.evaluateAlerts(),
+        apiDigiturnoService.getLiveMetrics(get().isFortnight),
+      ]);
+      set({ currentPlan: updated, alerts: freshAlerts, liveMetrics: freshMetrics });
     } catch (e) {
       get().showToast(e instanceof Error ? e.message : 'Error actualizando casilla', 'error');
     }
@@ -338,7 +352,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!plan) return;
     try {
       const reset = await apiTurnosService.resetToProposal(plan.fecha);
-      set({ currentPlan: reset });
+      const [freshAlerts, freshMetrics] = await Promise.all([
+        apiMotorService.evaluateAlerts(),
+        apiDigiturnoService.getLiveMetrics(get().isFortnight),
+      ]);
+      set({ currentPlan: reset, alerts: freshAlerts, liveMetrics: freshMetrics });
       get().showToast('Malla restaurada a la propuesta algorítmica original del motor', 'info');
     } catch (e) {
       get().showToast(e instanceof Error ? e.message : 'Error restaurando propuesta', 'error');
@@ -418,10 +436,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   acceptRedistribution: async (id) => {
     try {
       const updatedRec = await apiMotorService.acceptRedistribution(id);
-      const freshPlan = await apiTurnosService.getDayPlan(get().selectedDate);
+      const [freshPlan, freshAlerts, freshMetrics] = await Promise.all([
+        apiTurnosService.getDayPlan(get().selectedDate),
+        apiMotorService.evaluateAlerts(),
+        apiDigiturnoService.getLiveMetrics(get().isFortnight),
+      ]);
       set({
         recommendations: get().recommendations.map((r) => (r.id === id ? updatedRec : r)),
         currentPlan: freshPlan,
+        alerts: freshAlerts,
+        liveMetrics: freshMetrics,
       });
       get().showToast(
         `Traslado aceptado: ${updatedRec.colaboradorNombre} apoyará a ${updatedRec.oficinaDestinoNombre} (${updatedRec.modalidad}).`,
@@ -498,8 +522,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateRules: async (data) => {
     try {
       const updated = await apiCatalogService.updateRules(data);
-      set({ systemRules: updated });
-      get().showToast('Reglas laborales y umbrales SLA guardados en base de datos', 'success');
+      const fecha = get().selectedDate;
+      const dow = weekdayFromDate(fecha);
+      const isFn = get().isFortnight;
+      const [plan, alerts, recs, reqMatrix, metrics] = await Promise.all([
+        apiTurnosService.getDayPlan(fecha),
+        apiMotorService.evaluateAlerts(),
+        apiMotorService.getRedistributions(undefined, undefined, { fecha } as DayPlan),
+        apiMotorService.getRequiredAgents(dow, isFn),
+        apiDigiturnoService.getLiveMetrics(isFn),
+      ]);
+      set({
+        systemRules: updated,
+        currentPlan: plan,
+        alerts,
+        recommendations: recs,
+        requiredAgentsByOffice: reqMatrix.requiredByOffice,
+        liveMetrics: metrics,
+      });
+      get().showToast('Reglas laborales y umbrales SLA guardados; malla recalculada.', 'success');
     } catch (e) {
       get().showToast(e instanceof Error ? e.message : 'Error guardando reglas', 'error');
     }

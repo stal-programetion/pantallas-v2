@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import get_current_user, require_roles
 from app.core.privacy import sanitize_absence_for_role
 from app.database import get_db
+from app.engines.optimizer import weekday_from_date
 from app.etl.digiturno_source import get_digiturno_source
 from app.etl.excel_importer import import_digiturno_excel
 from app.etl.excel_io import (
@@ -109,7 +110,11 @@ def create_absence(
     is_fortnight = current_plan.is_fortnight if current_plan else True
 
     plan, recs, alerts = regenerate_full_day_state(
-        db, fecha=fecha, day_of_week=1, is_fortnight=is_fortnight, current_slot="10:00"
+        db,
+        fecha=fecha,
+        day_of_week=weekday_from_date(fecha),
+        is_fortnight=is_fortnight,
+        current_slot="10:00",
     )
     record_audit(
         db,
@@ -135,11 +140,13 @@ def update_absence(
     absence_id: str,
     body: AbsenceUpdateIn,
     user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
+    fecha: str = Query("2026-10-15"),
     db: Session = Depends(get_db),
 ) -> AbsenceOut:
     ab = db.get(AbsenceModel, absence_id)
     if not ab:
         raise HTTPException(status_code=404, detail="Ausencia no encontrada")
+    before = {"tipo": ab.tipo, "fechaInicio": ab.fecha_inicio, "fechaFin": ab.fecha_fin, "estado": ab.estado}
     if body.tipo is not None:
         ab.tipo = body.tipo
     if body.fecha_inicio is not None:
@@ -155,13 +162,27 @@ def update_absence(
     if body.estado is not None:
         ab.estado = body.estado
 
+    db.commit()
+
+    current_plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
+    is_fortnight = current_plan.is_fortnight if current_plan else True
+    regenerate_full_day_state(
+        db,
+        fecha=fecha,
+        day_of_week=weekday_from_date(fecha),
+        is_fortnight=is_fortnight,
+        current_slot="10:00",
+    )
+
     record_audit(
         db,
         user,
         action="ABSENCE_UPDATED",
         entity_type="absence",
         entity_id=ab.id,
-        summary=f"Ausencia {ab.id} actualizada.",
+        summary=f"Ausencia {ab.id} actualizada y malla de {fecha} recalculada.",
+        before=before,
+        after={"tipo": ab.tipo, "fechaInicio": ab.fecha_inicio, "fechaFin": ab.fecha_fin, "estado": ab.estado},
     )
     db.commit()
     db.refresh(ab)
@@ -185,7 +206,11 @@ def delete_absence(
     current_plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
     is_fortnight = current_plan.is_fortnight if current_plan else True
     plan, recs, alerts = regenerate_full_day_state(
-        db, fecha=fecha, day_of_week=1, is_fortnight=is_fortnight, current_slot="10:00"
+        db,
+        fecha=fecha,
+        day_of_week=weekday_from_date(fecha),
+        is_fortnight=is_fortnight,
+        current_slot="10:00",
     )
     record_audit(
         db,
@@ -236,7 +261,9 @@ async def import_absences_excel(
         )
         inserted += 1
     db.commit()
-    regenerate_full_day_state(db, fecha=fecha, day_of_week=1, is_fortnight=True)
+    regenerate_full_day_state(
+        db, fecha=fecha, day_of_week=weekday_from_date(fecha), is_fortnight=True
+    )
     record_audit(
         db,
         user,
@@ -251,7 +278,7 @@ async def import_absences_excel(
 
 @router.get("/absences/export")
 def export_absences(
-    user: Annotated[UserOut, Depends(get_current_user)],
+    user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
     db: Session = Depends(get_db),
 ) -> Response:
     absences = db.execute(select(AbsenceModel)).scalars().all()
@@ -269,10 +296,18 @@ def export_absences(
 
 @router.get("/alerts", response_model=list[AlertOut])
 def list_alerts(
+    _user: Annotated[UserOut, Depends(get_current_user)],
+    date: str | None = None,
     include_dismissed: bool = Query(False, alias="includeDismissed"),
     db: Session = Depends(get_db),
 ) -> list[AlertOut]:
     stmt = select(AlertModel)
+    if date:
+        stmt = stmt.where(AlertModel.plan_fecha == date)
+    else:
+        latest_plan = db.execute(select(DayPlanModel).order_by(DayPlanModel.updated_at.desc())).scalars().first()
+        if latest_plan:
+            stmt = stmt.where(AlertModel.plan_fecha == latest_plan.fecha)
     if not include_dismissed:
         stmt = stmt.where(AlertModel.leida.is_(False))
     rows = db.execute(stmt).scalars().all()
@@ -280,11 +315,23 @@ def list_alerts(
 
 
 @router.post("/alerts/{alert_id}/dismiss", response_model=AlertOut)
-def dismiss_alert(alert_id: str, db: Session = Depends(get_db)) -> AlertOut:
+def dismiss_alert(
+    alert_id: str,
+    user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
+    db: Session = Depends(get_db),
+) -> AlertOut:
     alert = db.get(AlertModel, alert_id)
     if not alert:
         raise HTTPException(status_code=404, detail="Alerta no encontrada")
     alert.leida = True
+    record_audit(
+        db,
+        user,
+        action="ALERT_DISMISSED",
+        entity_type="alert",
+        entity_id=alert.id,
+        summary=f"Alerta operativa descartada: {alert.titulo}.",
+    )
     db.commit()
     db.refresh(alert)
     return serialize_alert(alert)
@@ -292,22 +339,59 @@ def dismiss_alert(alert_id: str, db: Session = Depends(get_db)) -> AlertOut:
 
 # --- Reportes ---
 
+def _filter_turns_by_range(turns: list[HistoricalTurnModel], range_key: str) -> tuple[list[HistoricalTurnModel], int]:
+    """Filtra los turnos históricos por ventana temporal y retorna (turnos, días_hábiles_equivalentes)."""
+    key = (range_key or "30d").lower()
+    biz_days_map = {"hoy": 1, "7d": 5, "30d": 22, "90d": 66}
+    biz_days = biz_days_map.get(key, 22)
+
+    if not turns:
+        return [], biz_days
+    distinct_days = sorted({t.fecha_dia for t in turns if t.fecha_dia})
+    if not distinct_days:
+        return turns, biz_days
+
+    if key == "hoy":
+        target_days = set(distinct_days[-1:])
+    elif key == "7d":
+        target_days = set(distinct_days[-5:])
+    else:
+        target_days = set(distinct_days)
+
+    return [t for t in turns if t.fecha_dia in target_days], biz_days
+
+
 @router.get("/reports/summary", response_model=ReportSummaryOut)
 def reports_summary(
+    _user: Annotated[UserOut, Depends(get_current_user)],
     range: str = Query("30d"),
     db: Session = Depends(get_db),
 ) -> ReportSummaryOut:
     offices = db.execute(select(OfficeModel)).scalars().all()
     rules = db.get(SystemRulesModel, 1)
     mode = rules.source_mode if rules else "mock"
+    plan = db.execute(select(DayPlanModel).order_by(DayPlanModel.updated_at.desc())).scalars().first()
+    dow = weekday_from_date(plan.fecha) if plan else 4
+    is_fn = plan.is_fortnight if plan else True
+    if range == "hoy":
+        slot_ref = "10:00"
+    elif range == "7d":
+        slot_ref = "09:30"
+    else:
+        slot_ref = "10:00"
+
     source = get_digiturno_source(mode)
-    metrics = source.get_live_metrics(db, slot="10:00", day_of_week=1, is_fortnight=True)
+    metrics = source.get_live_metrics(db, slot=slot_ref, day_of_week=dow, is_fortnight=is_fn)
     metric_map = {m.oficina_id: m for m in metrics}
 
-    turns = db.execute(select(HistoricalTurnModel)).scalars().all()
+    all_turns = db.execute(select(HistoricalTurnModel)).scalars().all()
+    turns, biz_days = _filter_turns_by_range(all_turns, range)
     aba_by_off: dict[str, list[bool]] = {}
+    wait_by_off: dict[str, list[float]] = {}
     for t in turns:
         aba_by_off.setdefault(t.oficina_id, []).append(t.estado == "ABA")
+        if t.tiempo_espera_seg is not None and t.tiempo_espera_seg >= 0:
+            wait_by_off.setdefault(t.oficina_id, []).append(t.tiempo_espera_seg / 60.0)
 
     office_rows: list[ReportOfficeRowOut] = []
     sla_sum = 0.0
@@ -316,7 +400,13 @@ def reports_summary(
     for off in offices:
         m = metric_map.get(off.id)
         sla = m.sla_actual if m else 0.80
-        wait = m.espera_promedio_min if m else 6.5
+        base_wait = m.espera_promedio_min if m else 6.5
+        hist_waits = wait_by_off.get(off.id, [])
+        if range in ("7d", "30d", "90d") and hist_waits:
+            # Combinar espera proyectada del plan optimizado con referencia histórica del periodo
+            wait = round(0.75 * base_wait + 0.25 * min(25.0, sum(hist_waits) / len(hist_waits)), 1)
+        else:
+            wait = round(base_wait, 1)
         util = m.capacidad_utilizada if m else 78
         flags = aba_by_off.get(off.id, [])
         aba_pct = round((sum(flags) / len(flags)) * 100, 1) if flags else 4.5
@@ -333,7 +423,7 @@ def reports_summary(
                 departamento=off.departamento,
                 capacidad_puestos=off.capacidad_puestos,
                 clientes_en_fila=m.clientes_en_fila if m else 0,
-                espera_promedio_min=round(wait, 1),
+                espera_promedio_min=wait,
                 sla_actual=round(sla, 3),
                 estado_sla=m.estado_sla if m else "optimo",
                 tasa_abandono_pct=aba_pct,
@@ -343,8 +433,6 @@ def reports_summary(
     n = max(1, len(offices))
     total_aba = sum(1 for t in turns if t.estado == "ABA")
     global_aba = round((total_aba / len(turns)) * 100, 1) if turns else 6.8
-
-    plan = db.execute(select(DayPlanModel).order_by(DayPlanModel.updated_at.desc())).scalars().first()
     saved_min = plan.tiempo_ahorrado_minutos if plan else 82
 
     return ReportSummaryOut(
@@ -353,7 +441,7 @@ def reports_summary(
         espera_media_min=round(wait_sum / n, 1),
         utilizacion_pct=round(util_sum / n, 1),
         tiempo_ahorrado_min_dia=saved_min,
-        horas_mes_ahorradas=round((saved_min * 22) / 60.0, 1),
+        horas_mes_ahorradas=round((saved_min * biz_days) / 60.0, 1),
         tasa_abandono_pct=global_aba,
         oficinas=office_rows,
     )
@@ -361,27 +449,33 @@ def reports_summary(
 
 @router.get("/reports/export")
 def export_report(
+    _user: Annotated[UserOut, Depends(get_current_user)],
     format: str = Query("csv"),
+    range: str = Query("30d"),
     db: Session = Depends(get_db),
 ) -> Response:
     offices = db.execute(select(OfficeModel)).scalars().all()
     rules = db.get(SystemRulesModel, 1)
+    plan = db.execute(select(DayPlanModel).order_by(DayPlanModel.updated_at.desc())).scalars().first()
+    dow = weekday_from_date(plan.fecha) if plan else 4
+    is_fn = plan.is_fortnight if plan else True
+    slot_ref = "09:30" if range == "7d" else "10:00"
     source = get_digiturno_source(rules.source_mode if rules else "mock")
-    metrics = source.get_live_metrics(db, slot="10:00", day_of_week=1, is_fortnight=True)
+    metrics = source.get_live_metrics(db, slot=slot_ref, day_of_week=dow, is_fortnight=is_fn)
 
     if format.lower() == "xlsx":
         content = export_reports_xlsx(offices, metrics)
         return Response(
             content=content,
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": 'attachment; filename="Reporte_Turnos_Surtigas.xlsx"'},
+            headers={"Content-Disposition": f'attachment; filename="Reporte_Turnos_Surtigas_{range}.xlsx"'},
         )
 
     content = export_reports_csv(offices, metrics)
     return Response(
         content=content,
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="Reporte_Turnos_Surtigas.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="Reporte_Turnos_Surtigas_{range}.csv"'},
     )
 
 

@@ -371,6 +371,7 @@ export const SimulatorPage: React.FC = () => {
                       stroke="#1F2B6B"
                       strokeWidth={3}
                       dot={{ r: 4, fill: '#2D79AD' }}
+                      isAnimationActive={false}
                     />
                   </LineChart>
                 </ResponsiveContainer>

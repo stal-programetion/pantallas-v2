@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.engines.optimizer import weekday_from_date
 from app.etl.excel_importer import import_digiturno_excel
 from app.models.entities import (
     AbsenceModel,
@@ -88,7 +89,7 @@ def bootstrap_database(db: Session) -> None:
         regenerate_full_day_state(
             db,
             fecha=settings.default_plan_date,
-            day_of_week=1,
+            day_of_week=weekday_from_date(settings.default_plan_date),
             is_fortnight=True,
             current_slot="10:00",
         )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -11,11 +12,11 @@ from fastapi.responses import Response
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from app.core.auth import require_roles
+from app.core.auth import get_current_user, require_roles
 from app.database import get_db
 from app.engines.erlang import calculate_required_agents, evaluate_erlang_a
 from app.engines.forecast import get_office_day_forecast
-from app.engines.optimizer import validate_slot_change
+from app.engines.optimizer import validate_slot_change, weekday_from_date
 from app.engines.redistribution import generate_redistributions_for_plan, haversine_km
 from app.engines.simulator import simulate_office_des
 from app.etl.excel_importer import OPERATING_SLOTS_ALL
@@ -36,19 +37,42 @@ from app.schemas.api import (
 from app.services.operations import (
     apply_redistribution_to_plan,
     record_audit,
+    refresh_plan_metrics_and_alerts,
     regenerate_full_day_state,
     serialize_day_plan,
     serialize_redistribution,
+    sync_accepted_redistributions_on_plan,
 )
 
 router = APIRouter()
+ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _validate_iso_date(fecha: str) -> str:
+    if not ISO_DATE_RE.fullmatch(fecha or ""):
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido; use YYYY-MM-DD")
+    try:
+        datetime.strptime(fecha, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Fecha de calendario inválida") from exc
+    return fecha
 
 
 @router.get("/plans/{fecha}", response_model=DayPlanOut)
-def get_day_plan(fecha: str, db: Session = Depends(get_db)) -> DayPlanOut:
-    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
+def get_day_plan(
+    fecha: str,
+    _user: Annotated[UserOut, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+) -> DayPlanOut:
+    valid_fecha = _validate_iso_date(fecha)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == valid_fecha)).scalar_one_or_none()
     if not plan:
-        plan, _, _ = regenerate_full_day_state(db, fecha=fecha, day_of_week=1, is_fortnight=True)
+        plan, _, _ = regenerate_full_day_state(
+            db,
+            fecha=valid_fecha,
+            day_of_week=weekday_from_date(valid_fecha),
+            is_fortnight=True,
+        )
     return serialize_day_plan(plan)
 
 
@@ -58,10 +82,11 @@ def generate_day_plan(
     user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
     db: Session = Depends(get_db),
 ) -> DayPlanOut:
-    dow = body.day_of_week if body.day_of_week is not None else 1
+    valid_fecha = _validate_iso_date(body.fecha)
+    dow = body.day_of_week if body.day_of_week is not None else weekday_from_date(valid_fecha)
     plan, _, _ = regenerate_full_day_state(
         db,
-        fecha=body.fecha,
+        fecha=valid_fecha,
         day_of_week=dow,
         is_fortnight=body.is_fortnight,
     )
@@ -71,7 +96,7 @@ def generate_day_plan(
         action="PLAN_GENERATED",
         entity_type="day_plan",
         entity_id=plan.id,
-        summary=f"Propuesta generada por el motor PuLP/Erlang C para {body.fecha}.",
+        summary=f"Propuesta generada por el motor PuLP/Erlang C para {valid_fecha}.",
         after={"isFortnight": body.is_fortnight, "slaProyectadoRed": plan.sla_proyectado_red},
     )
     db.commit()
@@ -85,9 +110,10 @@ def approve_day_plan(
     user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
     db: Session = Depends(get_db),
 ) -> DayPlanOut:
-    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
+    valid_fecha = _validate_iso_date(fecha)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == valid_fecha)).scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan para fecha {fecha} no encontrado")
+        raise HTTPException(status_code=404, detail=f"Plan para fecha {valid_fecha} no encontrado")
 
     approver = body.approver_name or user.nombre
     manual_count = sum(
@@ -109,7 +135,7 @@ def approve_day_plan(
         action="PLAN_APPROVED",
         entity_type="day_plan",
         entity_id=plan.id,
-        summary=f"Plan del día {fecha} aprobado oficialmente por {approver} (v{plan.version}).",
+        summary=f"Plan del día {valid_fecha} aprobado oficialmente por {approver} (v{plan.version}).",
         before=before,
         after={"estado": plan.estado, "version": plan.version, "totalCambiosManuales": manual_count},
     )
@@ -122,11 +148,13 @@ def approve_day_plan(
 def validate_plan_slot(
     fecha: str,
     body: SlotValidateIn,
+    _user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
     db: Session = Depends(get_db),
 ) -> SlotValidateOut:
-    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
+    valid_fecha = _validate_iso_date(fecha)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == valid_fecha)).scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan {fecha} no encontrado")
+        raise HTTPException(status_code=404, detail=f"Plan {valid_fecha} no encontrado")
 
     offices = db.execute(select(OfficeModel)).scalars().all()
     staff_list = db.execute(select(StaffModel)).scalars().all()
@@ -135,7 +163,9 @@ def validate_plan_slot(
     if st:
         off = next((o for o in offices if o.id == st.oficina_base_id), None)
         if off:
-            fc_list = get_office_day_forecast(db, off.id, 1, plan.is_fortnight)
+            fc_list = get_office_day_forecast(
+                db, off.id, weekday_from_date(valid_fecha), plan.is_fortnight
+            )
             fc = next((x for x in fc_list if x.franja == body.franja), fc_list[0])
             required, _ = calculate_required_agents(
                 fc.tasa_llegadas_hora,
@@ -170,9 +200,10 @@ def patch_plan_slot(
     user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
     db: Session = Depends(get_db),
 ) -> DayPlanOut:
-    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
+    valid_fecha = _validate_iso_date(fecha)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == valid_fecha)).scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan {fecha} no encontrado")
+        raise HTTPException(status_code=404, detail=f"Plan {valid_fecha} no encontrado")
 
     turnos = copy.deepcopy(plan.turnos or {})
     if body.colaborador_id not in turnos or body.franja not in (turnos[body.colaborador_id].get("slots") or {}):
@@ -195,6 +226,7 @@ def patch_plan_slot(
     )
     plan.turnos = turnos
     plan.total_cambios_manuales = manual_count
+    refresh_plan_metrics_and_alerts(db, plan)
 
     record_audit(
         db,
@@ -217,15 +249,17 @@ def reset_plan(
     user: Annotated[UserOut, Depends(require_roles("ADMIN", "COORDINADOR"))],
     db: Session = Depends(get_db),
 ) -> DayPlanOut:
-    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
+    valid_fecha = _validate_iso_date(fecha)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == valid_fecha)).scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan {fecha} no encontrado")
+        raise HTTPException(status_code=404, detail=f"Plan {valid_fecha} no encontrado")
 
     plan.turnos = copy.deepcopy(plan.original_turnos or plan.turnos)
     plan.total_cambios_manuales = 0
     plan.estado = "propuesto"
     plan.aprobado_por = None
     plan.aprobado_en = None
+    refresh_plan_metrics_and_alerts(db, plan)
 
     record_audit(
         db,
@@ -233,7 +267,7 @@ def reset_plan(
         action="PLAN_RESET",
         entity_type="day_plan",
         entity_id=plan.id,
-        summary=f"Malla de {fecha} restaurada a la propuesta algorítmica original.",
+        summary=f"Malla de {valid_fecha} restaurada a la propuesta algorítmica original.",
     )
     db.commit()
     db.refresh(plan)
@@ -243,19 +277,21 @@ def reset_plan(
 @router.get("/plans/{fecha}/export")
 def export_plan(
     fecha: str,
+    _user: Annotated[UserOut, Depends(get_current_user)],
     format: str = Query("xlsx"),
     db: Session = Depends(get_db),
 ) -> Response:
-    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
+    valid_fecha = _validate_iso_date(fecha)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == valid_fecha)).scalar_one_or_none()
     if not plan:
-        raise HTTPException(status_code=404, detail=f"Plan {fecha} no encontrado")
+        raise HTTPException(status_code=404, detail=f"Plan {valid_fecha} no encontrado")
     staff_list = db.execute(select(StaffModel).order_by(StaffModel.id)).scalars().all()
     offices = db.execute(select(OfficeModel)).scalars().all()
     content = export_day_plan_xlsx(plan, staff_list, offices, OPERATING_SLOTS_ALL)
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="Plan_Turnos_Surtigas_{fecha}.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="Plan_Turnos_Surtigas_{valid_fecha}.xlsx"'},
     )
 
 
@@ -266,9 +302,12 @@ async def import_plan_excel(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> DayPlanOut:
-    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
+    valid_fecha = _validate_iso_date(fecha)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == valid_fecha)).scalar_one_or_none()
     if not plan:
-        plan, _, _ = regenerate_full_day_state(db, fecha=fecha, day_of_week=1, is_fortnight=True)
+        plan, _, _ = regenerate_full_day_state(
+            db, fecha=valid_fecha, day_of_week=weekday_from_date(valid_fecha), is_fortnight=True
+        )
 
     staff_list = db.execute(select(StaffModel).order_by(StaffModel.id)).scalars().all()
     offices = db.execute(select(OfficeModel)).scalars().all()
@@ -285,6 +324,7 @@ async def import_plan_excel(
     plan.turnos = updated_turnos
     plan.total_cambios_manuales = manual_count
     plan.estado = "borrador" if manual_count > 0 else plan.estado
+    refresh_plan_metrics_and_alerts(db, plan)
 
     record_audit(
         db,
@@ -292,7 +332,7 @@ async def import_plan_excel(
         action="PLAN_IMPORTED_EXCEL",
         entity_type="day_plan",
         entity_id=plan.id,
-        summary=f"Malla de {fecha} importada desde Excel ({imported_rows} filas procesadas, {manual_count} ajustes).",
+        summary=f"Malla de {valid_fecha} importada desde Excel ({imported_rows} filas procesadas, {manual_count} ajustes).",
     )
     db.commit()
     db.refresh(plan)
@@ -303,6 +343,7 @@ async def import_plan_excel(
 
 @router.get("/redistributions", response_model=list[RedistributionOut])
 def list_redistributions(
+    _user: Annotated[UserOut, Depends(get_current_user)],
     date: str | None = None,
     modalidad: str | None = None,
     db: Session = Depends(get_db),
@@ -323,14 +364,18 @@ def recalculate_redistributions(
     franja: str = "10:00",
     db: Session = Depends(get_db),
 ) -> list[RedistributionOut]:
-    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == date)).scalar_one_or_none()
+    valid_date = _validate_iso_date(date)
+    dow = weekday_from_date(valid_date)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == valid_date)).scalar_one_or_none()
     if not plan:
-        plan, recs, _ = regenerate_full_day_state(db, fecha=date, current_slot=franja)
+        plan, recs, _ = regenerate_full_day_state(
+            db, fecha=valid_date, day_of_week=dow, current_slot=franja
+        )
         return [serialize_redistribution(r) for r in recs]
 
-    db.execute(delete(RedistributionModel).where(RedistributionModel.plan_fecha == date))
+    db.execute(delete(RedistributionModel).where(RedistributionModel.plan_fecha == valid_date))
     rec_dicts = generate_redistributions_for_plan(
-        db, date, plan.turnos or {}, franja=franja, is_fortnight=plan.is_fortnight
+        db, valid_date, plan.turnos or {}, franja=franja, day_of_week=dow, is_fortnight=plan.is_fortnight
     )
     models = [RedistributionModel(**r) for r in rec_dicts]
     db.add_all(models)
@@ -339,8 +384,8 @@ def recalculate_redistributions(
         user,
         action="REDISTRIBUTIONS_RECALCULATED",
         entity_type="redistribution",
-        entity_id=date,
-        summary=f"Recalculadas {len(models)} propuestas de redistribución para {date}.",
+        entity_id=valid_date,
+        summary=f"Recalculadas {len(models)} propuestas de redistribución para {valid_date}.",
     )
     db.commit()
     return [serialize_redistribution(r) for r in models]
@@ -371,6 +416,10 @@ def reject_redistribution(
         raise HTTPException(status_code=404, detail=f"Recomendación {rec_id} no encontrada")
     before = {"estado": rec.estado}
     rec.estado = "rechazada"
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == rec.plan_fecha)).scalar_one_or_none()
+    if plan and before["estado"] == "aceptada":
+        sync_accepted_redistributions_on_plan(db, plan)
+
     record_audit(
         db,
         user,
@@ -403,20 +452,20 @@ def edit_redistribution(
         "modalidad": rec.modalidad,
         "franjaInicio": rec.franja_inicio,
         "franjaFin": rec.franja_fin,
+        "reduccionEsperaMin": rec.reduccion_espera_min,
+        "slaProyectadoDestino": rec.sla_proyectado_destino,
     }
     if body.colaborador_id is not None:
         st = db.get(StaffModel, body.colaborador_id)
         if not st:
             raise HTTPException(status_code=404, detail="Colaborador no encontrado")
-        orig_off = db.get(OfficeModel, st.oficina_base_id)
-        dest_off = db.get(OfficeModel, rec.oficina_destino_id)
         rec.colaborador_id = st.id
         rec.colaborador_nombre = st.nombre
-        if orig_off and dest_off:
-            rec.oficina_origen_id = orig_off.id
-            rec.oficina_origen_nombre = orig_off.nombre
-            rec.distancia_km = haversine_km(orig_off.lat, orig_off.lng, dest_off.lat, dest_off.lng)
-            rec.es_intermunicipal = orig_off.ciudad != dest_off.ciudad
+        orig_candidate = db.get(OfficeModel, st.oficina_base_id)
+        if orig_candidate:
+            rec.oficina_origen_id = orig_candidate.id
+            rec.oficina_origen_nombre = orig_candidate.nombre
+
     if body.modalidad is not None:
         rec.modalidad = body.modalidad
     if body.franja_inicio is not None:
@@ -424,19 +473,101 @@ def edit_redistribution(
     if body.franja_fin is not None:
         rec.franja_fin = body.franja_fin
 
+    orig_off = db.get(OfficeModel, rec.oficina_origen_id)
+    dest_off = db.get(OfficeModel, rec.oficina_destino_id)
+    plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == rec.plan_fecha)).scalar_one_or_none()
+    dow = weekday_from_date(rec.plan_fecha)
+    is_fn = plan.is_fortnight if plan else True
+    staff_list = db.execute(select(StaffModel)).scalars().all()
+    rules = db.get(SystemRulesModel, 1)
+    default_wait = rules.max_wait_min if rules else 10
+
+    if orig_off and dest_off:
+        rec.distancia_km = haversine_km(orig_off.lat, orig_off.lng, dest_off.lat, dest_off.lng)
+        rec.es_intermunicipal = orig_off.ciudad != dest_off.ciudad
+
+        eval_slot = rec.franja_inicio if rec.franja_inicio in OPERATING_SLOTS_ALL else "10:00"
+        dest_fc_list = get_office_day_forecast(db, dest_off.id, dow, is_fn)
+        dest_fc = next((x for x in dest_fc_list if x.franja == eval_slot), dest_fc_list[0])
+        orig_fc_list = get_office_day_forecast(db, orig_off.id, dow, is_fn)
+        orig_fc = next((x for x in orig_fc_list if x.franja == eval_slot), orig_fc_list[0])
+
+        base_turnos = (plan.original_turnos if plan else None) or (plan.turnos if plan else {}) or {}
+        counting = {"atencion", "apoyo_virtual", "apoyo_presencial"}
+        dest_assigned = max(
+            1,
+            sum(
+                1
+                for s in staff_list
+                if (base_turnos.get(s.id, {}).get("slots") or {}).get(eval_slot, {}).get("estado") in counting
+                and (base_turnos.get(s.id, {}).get("slots") or {}).get(eval_slot, {}).get("oficinaAsignadaId")
+                == dest_off.id
+            ),
+        )
+        orig_assigned = max(
+            1,
+            sum(
+                1
+                for s in staff_list
+                if (base_turnos.get(s.id, {}).get("slots") or {}).get(eval_slot, {}).get("estado") in counting
+                and (base_turnos.get(s.id, {}).get("slots") or {}).get(eval_slot, {}).get("oficinaAsignadaId")
+                == orig_off.id
+            ),
+        )
+
+        wait_dest = dest_off.tiempo_espera_max_min or default_wait
+        wait_orig = orig_off.tiempo_espera_max_min or default_wait
+        w_before, sla_before, ab_before = simulate_office_des(
+            dest_fc.tasa_llegadas_hora,
+            dest_fc.tiempo_atencion_promedio_min,
+            dest_assigned,
+            wait_dest,
+            replications=4,
+            seed=410,
+        )
+        w_after, sla_after, ab_after = simulate_office_des(
+            dest_fc.tasa_llegadas_hora,
+            dest_fc.tiempo_atencion_promedio_min,
+            dest_assigned + 1,
+            wait_dest,
+            replications=4,
+            seed=410,
+        )
+        ev_orig_after = evaluate_erlang_a(
+            orig_fc.tasa_llegadas_hora,
+            orig_fc.tiempo_atencion_promedio_min,
+            max(1, orig_assigned - 1),
+            wait_orig,
+        )
+
+        rec.reduccion_espera_min = max(0.5, round(w_before - w_after, 1))
+        rec.sla_proyectado_destino = round(max(sla_after, sla_before), 3)
+        rec.sla_origen_resultante = round(ev_orig_after.nivel_servicio, 3)
+        rec.abandono_antes_pct = round(ab_before, 1)
+        rec.abandono_despues_pct = round(ab_after, 1)
+        rec.motivo = (
+            f"Refuerzo {rec.modalidad} ajustado ({rec.franja_inicio}-{rec.franja_fin}) para {dest_off.nombre}. "
+            f"{orig_off.nombre} mantiene SLA {round(ev_orig_after.nivel_servicio * 100)}%."
+        )
+
+    if plan and rec.estado == "aceptada":
+        sync_accepted_redistributions_on_plan(db, plan)
+
     record_audit(
         db,
         user,
         action="REDISTRIBUTION_EDITED",
         entity_type="redistribution",
         entity_id=rec.id,
-        summary=f"Parámetros de redistribución editados para {rec.oficina_destino_nombre}.",
+        summary=f"Parámetros e impacto de redistribución recalculados para {rec.oficina_destino_nombre}.",
         before=before,
         after={
             "colaboradorId": rec.colaborador_id,
             "modalidad": rec.modalidad,
             "franjaInicio": rec.franja_inicio,
             "franjaFin": rec.franja_fin,
+            "reduccionEsperaMin": rec.reduccion_espera_min,
+            "slaProyectadoDestino": rec.sla_proyectado_destino,
         },
     )
     db.commit()
@@ -456,11 +587,16 @@ def request_office_support(
 
     plan = db.execute(select(DayPlanModel).order_by(DayPlanModel.updated_at.desc())).scalars().first()
     plan_fecha = plan.fecha if plan else "2026-10-15"
+    dow = weekday_from_date(plan_fecha)
+    is_fn = plan.is_fortnight if plan else True
 
-    # Buscar asesor virtual disponible en otra sede
     staff_list = db.execute(select(StaffModel)).scalars().all()
     candidate = next(
-        (s for s in staff_list if s.oficina_base_id != office_id and s.estado_hoy == "disponible" and s.modalidad == "virtual"),
+        (
+            s
+            for s in staff_list
+            if s.oficina_base_id != office_id and s.estado_hoy == "disponible" and s.modalidad == "virtual"
+        ),
         next((s for s in staff_list if s.oficina_base_id != office_id and s.estado_hoy == "disponible"), None),
     )
     if not candidate:
@@ -470,20 +606,43 @@ def request_office_support(
     dist = haversine_km(orig_off.lat, orig_off.lng, dest_off.lat, dest_off.lng)
     rules = db.get(SystemRulesModel, 1)
     max_km = rules.max_presencial_km if rules else 45.0
+    default_wait = rules.max_wait_min if rules else 10
     modalidad = "presencial" if dist <= max_km else "virtual"
 
-    fc_list = get_office_day_forecast(db, dest_off.id, 1, True)
+    fc_list = get_office_day_forecast(db, dest_off.id, dow, is_fn)
     peak_fc = next((f for f in fc_list if f.franja == "10:00"), fc_list[0])
-    cur_agents = max(1, len([s for s in staff_list if s.oficina_base_id == dest_off.id and s.estado_hoy == "disponible"]))
+    orig_fc_list = get_office_day_forecast(db, orig_off.id, dow, is_fn)
+    orig_fc = next((f for f in orig_fc_list if f.franja == "10:00"), orig_fc_list[0])
+
+    cur_agents = max(
+        1, len([s for s in staff_list if s.oficina_base_id == dest_off.id and s.estado_hoy == "disponible"])
+    )
+    orig_agents = max(
+        1, len([s for s in staff_list if s.oficina_base_id == orig_off.id and s.estado_hoy == "disponible"]) - 1
+    )
+
     w_before, _, ab_before = simulate_office_des(
-        peak_fc.tasa_llegadas_hora, peak_fc.tiempo_atencion_promedio_min, cur_agents, dest_off.tiempo_espera_max_min, replications=4
+        peak_fc.tasa_llegadas_hora,
+        peak_fc.tiempo_atencion_promedio_min,
+        cur_agents,
+        dest_off.tiempo_espera_max_min or default_wait,
+        replications=4,
     )
     w_after, sla_after, ab_after = simulate_office_des(
-        peak_fc.tasa_llegadas_hora, peak_fc.tiempo_atencion_promedio_min, cur_agents + 1, dest_off.tiempo_espera_max_min, replications=4
+        peak_fc.tasa_llegadas_hora,
+        peak_fc.tiempo_atencion_promedio_min,
+        cur_agents + 1,
+        dest_off.tiempo_espera_max_min or default_wait,
+        replications=4,
     )
-    ev_orig = evaluate_erlang_a(8.0, 7.0, 2, 10)
+    ev_orig = evaluate_erlang_a(
+        orig_fc.tasa_llegadas_hora,
+        orig_fc.tiempo_atencion_promedio_min,
+        orig_agents,
+        orig_off.tiempo_espera_max_min or default_wait,
+    )
 
-    rec_id = f"redist-req-{dest_off.id}-{candidate.id}"
+    rec_id = f"redist-req-{plan_fecha}-{dest_off.id}-{candidate.id}"
     existing = db.get(RedistributionModel, rec_id)
     if existing:
         db.delete(existing)
@@ -503,7 +662,10 @@ def request_office_support(
         es_intermunicipal=orig_off.ciudad != dest_off.ciudad,
         franja_inicio="10:00",
         franja_fin="12:00",
-        motivo=f"Solicitud directa de refuerzo para {dest_off.nombre}.",
+        motivo=(
+            f"Solicitud directa de refuerzo {modalidad} para {dest_off.nombre}. "
+            f"{orig_off.nombre} mantiene SLA {round(ev_orig.nivel_servicio * 100)}%."
+        ),
         reduccion_espera_min=max(1.0, round(w_before - w_after, 1)),
         sla_proyectado_destino=round(sla_after, 3),
         sla_origen_resultante=round(ev_orig.nivel_servicio, 3),

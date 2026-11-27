@@ -115,3 +115,118 @@ def test_plan_import_excel_and_redistribution_edit_audit(client: TestClient):
         actions = {a["action"] for a in audit}
         assert "PLAN_IMPORTED_EXCEL" in actions
         assert "REDISTRIBUTION_EDITED" in actions
+
+
+def test_multi_date_plans_no_pk_collision_and_invalid_date_400(client: TestClient):
+    r_bad = client.get("/api/v1/plans/active")
+    assert r_bad.status_code == 400
+
+    r_day1 = client.get("/api/v1/plans/2026-10-15")
+    r_day2 = client.get("/api/v1/plans/2026-10-16")
+    assert r_day1.status_code == 200
+    assert r_day2.status_code == 200
+
+    alerts_1 = client.get("/api/v1/alerts?date=2026-10-15").json()
+    alerts_2 = client.get("/api/v1/alerts?date=2026-10-16").json()
+    assert len(alerts_1) > 0 and len(alerts_2) > 0
+    assert {a["id"] for a in alerts_1}.isdisjoint({a["id"] for a in alerts_2})
+
+    recs_2 = client.get("/api/v1/redistributions?date=2026-10-16").json()
+    assert len(recs_2) >= 1
+
+
+def test_absence_patch_recalculates_and_redistribution_edit_updates_impact(client: TestClient):
+    token = client.post("/api/v1/auth/demo-session", json={"rol": "COORDINADOR"}).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Crear ausencia temporal en una fecha dedicada para aislar la prueba
+    r_create = client.post(
+        "/api/v1/absences?fecha=2026-10-19",
+        headers=headers,
+        json={
+            "colaboradorId": "st-02",
+            "tipo": "permiso_personal",
+            "fechaInicio": "2026-10-19",
+            "fechaFin": "2026-10-19",
+            "diagnosticoSalud": "N/A",
+            "aprobadoPor": "Coordinación",
+            "motivoDetalle": "Prueba PATCH ausencia",
+            "estado": "activa",
+        },
+    )
+    assert r_create.status_code == 200
+    abs_id = r_create.json()["absence"]["id"]
+    assert r_create.json()["plan"]["turnos"]["st-02"]["slots"]["10:00"]["estado"] == "ausente"
+
+    # Editar ausencia a rango fuera de la fecha -> debe recalcular y reintegrar colaborador
+    r_patch = client.patch(
+        f"/api/v1/absences/{abs_id}?fecha=2026-10-19",
+        headers=headers,
+        json={"estado": "finalizada", "fechaInicio": "2026-10-20", "fechaFin": "2026-10-21"},
+    )
+    assert r_patch.status_code == 200
+    plan_after = client.get("/api/v1/plans/2026-10-19").json()
+    assert plan_after["turnos"]["st-02"]["slots"]["10:00"]["estado"] != "ausente"
+
+    # Editar redistribución cambiando franja y validar recálculo de impacto + auditoría
+    recs = client.get("/api/v1/redistributions?date=2026-10-19").json()
+    assert len(recs) >= 1
+    rec_id = recs[0]["id"]
+    r_edit = client.patch(
+        f"/api/v1/redistributions/{rec_id}",
+        headers=headers,
+        json={"modalidad": "virtual", "franjaInicio": "08:00", "franjaFin": "10:30"},
+    )
+    assert r_edit.status_code == 200
+    edited = r_edit.json()
+    assert edited["impactoEstimado"]["reduccionEsperaMin"] > 0
+    assert edited["impactoEstimado"]["slaOrigenResultante"] > 0
+
+    audit = client.get("/api/v1/audit", headers=headers).json()
+    assert any(a["action"] == "ABSENCE_UPDATED" for a in audit)
+
+
+def test_simulation_apply_scenario_and_rules_lunch_duration(client: TestClient):
+    token = client.post("/api/v1/auth/demo-session", json={"rol": "ADMIN"}).json()["accessToken"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    r_app = client.post(
+        "/api/v1/simulation/apply-scenario",
+        headers=headers,
+        json={
+            "fecha": "2026-10-19",
+            "params": {
+                "additionalAbsences": 1,
+                "demandMultiplier": 1.25,
+                "targetSla": 0.85,
+                "officeIdFilter": "cartagena-chambacu",
+            },
+        },
+    )
+    assert r_app.status_code == 200
+    justs = r_app.json()["justificaciones"]
+    assert any(j["id"] == "just-sim-abs-cartagena-chambacu" for j in justs)
+
+    # Regla de almuerzo de 30 min -> debe asignar exactamente 1 franja de almuerzo y luego restaurar 60 min
+    try:
+        r_rules = client.put(
+            "/api/v1/settings/rules",
+            headers=headers,
+            json={"lunchDurationMin": 30, "targetSla": 0.80},
+        )
+        assert r_rules.status_code == 200
+        plan_30 = client.get("/api/v1/plans/2026-10-19").json()
+        lunch_30 = [
+            s for s, info in plan_30["turnos"]["st-01"]["slots"].items() if info["estado"] == "almuerzo"
+        ]
+        assert len(lunch_30) == 1
+    finally:
+        client.put(
+            "/api/v1/settings/rules",
+            headers=headers,
+            json={"lunchDurationMin": 60, "targetSla": 0.80},
+        )
+
+    rep_hoy = client.get("/api/v1/reports/summary?range=hoy").json()
+    rep_30 = client.get("/api/v1/reports/summary?range=30d").json()
+    assert rep_hoy["horasMesAhorradas"] < rep_30["horasMesAhorradas"]

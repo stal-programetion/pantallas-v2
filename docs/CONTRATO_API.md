@@ -1,6 +1,6 @@
 # Contrato de API Inferido — Plataforma de Gestión Inteligente de Turnos (Surtigas)
 
-> **Estado:** Borrador Fase 1 (pendiente de aprobación).  
+> **Estado:** Aprobado e implementado (v1.0.0).  
 > **Base URL:** `${VITE_API_BASE_URL}/api/v1` (por defecto en desarrollo: `http://localhost:8000/api/v1`).  
 > **Documentación interactiva:** OpenAPI 3.1 en `/docs` y `/openapi.json`.
 
@@ -198,7 +198,8 @@
 | `POST` | `/api/v1/plans/{date}/slots/validate` | `ADMIN`, `COORDINADOR` | Valida un cambio manual de casilla y devuelve impacto antes/después y advertencias (`isValid`, `warningMessage`, `before`, `after`, `required`). |
 | `PATCH` | `/api/v1/plans/{date}/slots` | `ADMIN`, `COORDINADOR` | Actualiza manualmente un slot (`colaboradorId`, `franja`, `estado`, `oficinaAsignadaId?`, `nota?`), marca `esModificadoManual=true` y audita. |
 | `POST` | `/api/v1/plans/{date}/reset` | `ADMIN`, `COORDINADOR` | Restaura la malla a la propuesta algorítmica original y audita. |
-| `GET` | `/api/v1/plans/{date}/export` | Todos | Descarga la malla y propuesta del día en Excel (`?format=xlsx` o `csv`). |
+| `GET` | `/api/v1/plans/{date}/export` | Todos | Descarga la malla y propuesta del día en Excel (`?format=xlsx`). |
+| `POST` | `/api/v1/plans/{date}/import-excel` | `ADMIN`, `COORDINADOR` | Importa ajustes manuales de la malla desde Excel (`.xlsx`) y audita. |
 
 **`POST /api/v1/plans/generate` — Request:**
 ```json
@@ -316,7 +317,7 @@
 | `LoginPage` | `POST /auth/demo-session`, `POST /auth/login`, `GET /auth/me` |
 | `DashboardPage` | `GET /digiturno/live-metrics`, `GET /digiturno/network-load`, `GET /digiturno/user-behavior`, `POST /redistributions/{id}/accept`, `POST /redistributions/{id}/reject` |
 | `DayPlanPage` | `POST /plans/generate`, `GET /forecast/peaks-summary`, `POST /plans/{date}/approve`, `POST /redistributions/{id}/accept|reject` |
-| `ShiftGridPage` | `GET /plans/{date}`, `GET /forecast/required-agents`, `POST /plans/{date}/slots/validate`, `PATCH /plans/{date}/slots`, `POST /plans/{date}/reset`, `GET /plans/{date}/export` |
+| `ShiftGridPage` | `GET /plans/{date}`, `GET /forecast/required-agents`, `POST /plans/{date}/slots/validate`, `PATCH /plans/{date}/slots`, `POST /plans/{date}/reset`, `GET /plans/{date}/export`, `POST /plans/{date}/import-excel` |
 | `RedistributionPage` | `GET /redistributions`, `POST /redistributions/{id}/accept|reject`, `PATCH /redistributions/{id}` |
 | `OfficeDetailPage` | `GET /offices/{officeId}`, `GET /digiturno/live-metrics/{officeId}`, `GET /digiturno/office-daily-activity/{officeId}`, `GET /forecast/office/{officeId}`, `POST /offices/{officeId}/request-support`, `POST /offices/{officeId}/release-staff` |
 | `DemandAnalysisPage` | `GET /forecast/heatmap/{officeId}`, `GET /forecast/compare-fortnight/{officeId}`, `GET /forecast/compare-offices` |

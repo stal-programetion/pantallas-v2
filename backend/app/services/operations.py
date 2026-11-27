@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.core.privacy import safe_audit_log
 from app.engines.alerts import evaluate_alerts_for_plan
-from app.engines.optimizer import generate_day_plan_data
+from app.engines.optimizer import (
+    compute_plan_network_sla,
+    generate_day_plan_data,
+    weekday_from_date,
+)
 from app.engines.redistribution import generate_redistributions_for_plan
 from app.models.entities import (
     AlertModel,
@@ -130,15 +134,61 @@ def serialize_alert(model: AlertModel) -> AlertOut:
     )
 
 
+def refresh_plan_metrics_and_alerts(
+    db: Session,
+    plan: DayPlanModel,
+    current_slot: str = "10:00",
+) -> list[AlertModel]:
+    """Recalcula el SLA proyectado de red y las alertas operativas tras cambios en la malla."""
+    dow = weekday_from_date(plan.fecha)
+    turnos = plan.turnos or {}
+    plan.sla_proyectado_red = compute_plan_network_sla(
+        db,
+        turnos,
+        day_of_week=dow,
+        is_fortnight=plan.is_fortnight,
+    )
+    plan.updated_at = datetime.now(timezone.utc)
+
+    db.execute(delete(AlertModel).where(AlertModel.plan_fecha == plan.fecha))
+    alert_dicts = evaluate_alerts_for_plan(
+        db,
+        plan.fecha,
+        turnos,
+        current_slot=current_slot,
+        day_of_week=dow,
+        is_fortnight=plan.is_fortnight,
+    )
+    alert_models = [AlertModel(**a) for a in alert_dicts]
+    db.add_all(alert_models)
+    return alert_models
+
+
 def regenerate_full_day_state(
     db: Session,
     fecha: str,
-    day_of_week: int = 1,
+    day_of_week: int | None = None,
     is_fortnight: bool = True,
     current_slot: str = "10:00",
+    demand_multiplier: float = 1.0,
+    target_sla_override: float | None = None,
+    additional_absences: int = 0,
+    office_id_filter: str | None = None,
+    agents_override: dict[str, int] | None = None,
 ) -> tuple[DayPlanModel, list[RedistributionModel], list[AlertModel]]:
     """Recalcula el plan del día, redistribuciones y alertas atómicamente."""
-    generated = generate_day_plan_data(db, fecha, day_of_week, is_fortnight)
+    effective_dow = day_of_week if day_of_week is not None else weekday_from_date(fecha)
+    generated = generate_day_plan_data(
+        db,
+        fecha,
+        day_of_week=effective_dow,
+        is_fortnight=is_fortnight,
+        demand_multiplier=demand_multiplier,
+        target_sla_override=target_sla_override,
+        additional_absences=additional_absences,
+        office_id_filter=office_id_filter,
+        agents_override=agents_override,
+    )
     turnos = generated["turnos"]
 
     plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == fecha)).scalar_one_or_none()
@@ -169,7 +219,6 @@ def regenerate_full_day_state(
         plan.justificaciones = generated["justificaciones"]
         plan.is_fortnight = is_fortnight
 
-    # Actualizar estadoHoy de staff según ausencias activas en el plan
     staff_list = db.execute(select(StaffModel)).scalars().all()
     for st in staff_list:
         slots = turnos.get(st.id, {}).get("slots", {})
@@ -178,18 +227,16 @@ def regenerate_full_day_state(
         else:
             st.estado_hoy = "disponible"
 
-    # Recalcular redistribuciones
     db.execute(delete(RedistributionModel).where(RedistributionModel.plan_fecha == fecha))
     rec_dicts = generate_redistributions_for_plan(
-        db, fecha, turnos, franja=current_slot, day_of_week=day_of_week, is_fortnight=is_fortnight
+        db, fecha, turnos, franja=current_slot, day_of_week=effective_dow, is_fortnight=is_fortnight
     )
     rec_models = [RedistributionModel(**r) for r in rec_dicts]
     db.add_all(rec_models)
 
-    # Recalcular alertas
     db.execute(delete(AlertModel).where(AlertModel.plan_fecha == fecha))
     alert_dicts = evaluate_alerts_for_plan(
-        db, fecha, turnos, current_slot=current_slot, day_of_week=day_of_week, is_fortnight=is_fortnight
+        db, fecha, turnos, current_slot=current_slot, day_of_week=effective_dow, is_fortnight=is_fortnight
     )
     alert_models = [AlertModel(**a) for a in alert_dicts]
     db.add_all(alert_models)
@@ -199,12 +246,48 @@ def regenerate_full_day_state(
     return plan, rec_models, alert_models
 
 
+def sync_accepted_redistributions_on_plan(
+    db: Session,
+    plan: DayPlanModel,
+) -> None:
+    """Reaplica las redistribuciones aceptadas sobre la malla base del plan y actualiza métricas/alertas."""
+    base_turnos = copy.deepcopy(plan.original_turnos or plan.turnos or {})
+    accepted_recs = db.execute(
+        select(RedistributionModel).where(
+            RedistributionModel.plan_fecha == plan.fecha,
+            RedistributionModel.estado == "aceptada",
+        )
+    ).scalars().all()
+
+    for rec in accepted_recs:
+        if rec.colaborador_id not in base_turnos:
+            continue
+        slots = base_turnos[rec.colaborador_id].get("slots", {})
+        target_state = "apoyo_presencial" if rec.modalidad == "presencial" else "apoyo_virtual"
+        for franja, sl in slots.items():
+            if rec.franja_inicio <= franja <= rec.franja_fin:
+                sl["estado"] = target_state
+                sl["oficinaAsignadaId"] = rec.oficina_destino_id
+                sl["esModificadoManual"] = True
+                sl["nota"] = f"Redistribución aprobada: apoyo a {rec.oficina_destino_nombre}"
+
+    manual_count = sum(
+        1
+        for shift in base_turnos.values()
+        for sl in (shift.get("slots") or {}).values()
+        if sl.get("esModificadoManual")
+    )
+    plan.turnos = base_turnos
+    plan.total_cambios_manuales = manual_count
+    refresh_plan_metrics_and_alerts(db, plan)
+
+
 def apply_redistribution_to_plan(
     db: Session,
     rec: RedistributionModel,
     user: UserOut,
 ) -> tuple[RedistributionModel, DayPlanModel | None]:
-    """Acepta una redistribución, actualiza slots en el DayPlan y registra auditoría."""
+    """Acepta una redistribución, actualiza slots, SLA y alertas en el DayPlan y registra auditoría."""
     before_state = {"estado": rec.estado}
     rec.estado = "aceptada"
     plan = db.execute(select(DayPlanModel).where(DayPlanModel.fecha == rec.plan_fecha)).scalar_one_or_none()
@@ -212,20 +295,21 @@ def apply_redistribution_to_plan(
         turnos = copy.deepcopy(plan.turnos)
         slots = turnos[rec.colaborador_id].get("slots", {})
         target_state = "apoyo_presencial" if rec.modalidad == "presencial" else "apoyo_virtual"
-        manual_count = 0
         for franja, sl in slots.items():
             if rec.franja_inicio <= franja <= rec.franja_fin:
                 sl["estado"] = target_state
                 sl["oficinaAsignadaId"] = rec.oficina_destino_id
                 sl["esModificadoManual"] = True
                 sl["nota"] = f"Redistribución aprobada: apoyo a {rec.oficina_destino_nombre}"
-        for shift in turnos.values():
-            for sl in (shift.get("slots") or {}).values():
-                if sl.get("esModificadoManual"):
-                    manual_count += 1
+        manual_count = sum(
+            1
+            for shift in turnos.values()
+            for sl in (shift.get("slots") or {}).values()
+            if sl.get("esModificadoManual")
+        )
         plan.turnos = turnos
         plan.total_cambios_manuales = manual_count
-        plan.updated_at = datetime.now(timezone.utc)
+        refresh_plan_metrics_and_alerts(db, plan)
 
     record_audit(
         db,

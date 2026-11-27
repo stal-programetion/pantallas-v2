@@ -128,7 +128,9 @@ def get_office_day_forecast(
         r = by_slot.get(slot)
         if r and r.muestras > 0:
             svc_min = max(4.0, round(r.tiempo_atencion_promedio_seg / 60.0, 1))
-            es_pico = r.tasa_llegadas_hora >= avg_lambda * 1.18 or slot in ("08:30", "09:00", "09:30", "10:00", "14:00")
+            es_pico = r.tasa_llegadas_hora >= avg_lambda * 1.18 or slot in (
+                "07:30", "08:30", "09:00", "09:30", "10:00", "14:00"
+            )
             results.append(
                 SlotForecastOut(
                     franja=slot,
@@ -271,7 +273,10 @@ def build_peaks_summary(
 
     for off in offices:
         fc = {f.franja: f for f in get_office_day_forecast(db, off.id, day_of_week, is_fortnight)}
-        peak_f = max((fc[s] for s in ("08:30", "09:00", "09:30", "10:00") if s in fc), key=lambda x: x.tasa_llegadas_hora)
+        peak_f = max(
+            (fc[s] for s in ("07:30", "08:00", "08:30", "09:00", "09:30", "10:00") if s in fc),
+            key=lambda x: x.tasa_llegadas_hora,
+        )
         morning_rate += peak_f.tasa_llegadas_hora
         valley_rate += fc.get("12:00", peak_f).tasa_llegadas_hora
         afternoon_rate += fc.get("14:00", peak_f).tasa_llegadas_hora
@@ -298,10 +303,10 @@ def build_peaks_summary(
 
     blocks = [
         PeakBlockOut(
-            titulo="Pico Matutino (Máxima Afluencia)",
-            rango="08:00 - 10:30",
+            titulo="Apertura y Pico Matutino (Máxima Afluencia)",
+            rango="07:30 - 10:30",
             descripcion=(
-                f"Mayor congestión de la jornada (~{round(morning_rate, 1)} cli/h en toda la red). "
+                f"Mayor congestión de la jornada (~{round(morning_rate, 1)} cli/h en toda la red desde apertura 07:30). "
                 "Predominan reclamos, PQR y solicitudes."
             ),
             recomendacion="100% de agentes en ventanilla; prohibidos almuerzos en esta ventana",
