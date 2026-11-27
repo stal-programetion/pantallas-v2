@@ -7,33 +7,18 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
 } from 'recharts';
-import { OPERATING_SLOTS, predictArrivals } from '../../engine/forecast';
 import { useAppStore } from '../../store/useAppStore';
 
 export const LiveQueueChart: React.FC<{ bare?: boolean }> = ({ bare = false }) => {
-  const { isFortnight, currentSlotTime } = useAppStore();
+  const { networkLoad } = useAppStore();
 
-  // Generamos los datos agregados de toda la red para la gráfica
-  const chartData = OPERATING_SLOTS.map((slot) => {
-    // Agregado de las 14 sedes
-    const forecast = predictArrivals('cartagena-chambacu', 1, slot, isFortnight);
-    // Multiplicamos por la escala de red
-    const totalPredictedDemand = Math.round(forecast.tasaLlegadasHora * 5.8);
-    const capacity = Math.round(totalPredictedDemand * 1.05);
-
-    // Si ya pasó la franja o es la actual, mostramos llegadas reales con leve variación
-    const isPastOrCurrent = slot <= currentSlotTime;
-    const liveVariation = isPastOrCurrent ? Math.round(totalPredictedDemand * 0.98 + (slot === '10:00' ? 8 : -2)) : null;
-
-    return {
-      franja: slot,
-      'Demanda Pronosticada': totalPredictedDemand,
-      'Llegadas Digiturno': liveVariation,
-      'Capacidad Operativa': capacity,
-    };
-  });
+  const chartData = networkLoad.map((point) => ({
+    franja: point.franja,
+    'Demanda Pronosticada': point.demandaPronosticada,
+    'Llegadas Digiturno': point.llegadasDigiturno,
+    'Capacidad Operativa': point.capacidadOperativa,
+  }));
 
   return (
     <div className={bare ? '' : 'bg-white rounded-2xl border border-slate-200 p-5'}>
@@ -96,6 +81,7 @@ export const LiveQueueChart: React.FC<{ bare?: boolean }> = ({ bare = false }) =
               strokeWidth={2}
               fillOpacity={1}
               fill="url(#colorPronostico)"
+              isAnimationActive={false}
             />
             <Area
               type="monotone"
@@ -104,6 +90,7 @@ export const LiveQueueChart: React.FC<{ bare?: boolean }> = ({ bare = false }) =
               strokeWidth={2.5}
               fillOpacity={1}
               fill="url(#colorReal)"
+              isAnimationActive={false}
             />
           </AreaChart>
         </ResponsiveContainer>

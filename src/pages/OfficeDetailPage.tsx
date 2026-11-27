@@ -1,19 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Building2,
   Users,
-  Clock,
   Phone,
   MapPin,
-  CheckCircle2,
-  AlertTriangle,
   ArrowRight,
-  UserCheck,
   Send,
   UserPlus,
-  ShieldAlert,
-  Sparkles,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -27,8 +21,7 @@ import {
 import { useAppStore } from '../store/useAppStore';
 import { TrafficLight } from '../components/common/TrafficLight';
 import { StatusBadge } from '../components/common/StatusBadge';
-import { OPERATING_SLOTS, predictArrivals } from '../engine/forecast';
-import { TooltipWhy } from '../components/common/TooltipWhy';
+import { apiDigiturnoService, apiMotorService, type SlotForecastItem } from '../services';
 
 export const OfficeDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -37,59 +30,70 @@ export const OfficeDetailPage: React.FC = () => {
     offices,
     staff,
     liveMetrics,
-    alerts,
     currentPlan,
     currentSlotTime,
-    showToast,
+    isFortnight,
+    requestOfficeSupport,
+    releaseOfficeStaff,
   } = useAppStore();
 
   const office = offices.find((o) => o.id === id) || offices[0];
+  const [officeForecast, setOfficeForecast] = useState<SlotForecastItem[]>([]);
+  const [dailyActivity, setDailyActivity] = useState<Array<{ franja: string; Atendidos: number; EnEspera: number }>>([]);
+
+  useEffect(() => {
+    if (!office) return;
+    let active = true;
+    Promise.all([
+      apiMotorService.getOfficeForecast(office.id, 1, isFortnight),
+      apiDigiturnoService.getOfficeDailyActivity(office.id, currentSlotTime, isFortnight),
+    ])
+      .then(([fc, activity]) => {
+        if (!active) return;
+        setOfficeForecast(fc);
+        setDailyActivity(
+          activity.map((pt) => ({
+            franja: pt.franja,
+            Atendidos: pt.atendidos,
+            EnEspera: pt.enEspera,
+          }))
+        );
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [office?.id, currentSlotTime, isFortnight]);
+
+  if (!office) {
+    return (
+      <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center text-sm text-slate-500">
+        Cargando información de la oficina...
+      </div>
+    );
+  }
+
   const metrics = liveMetrics.find((m) => m.oficinaId === office.id);
   const officeStaff = staff.filter((s) => s.oficinaBaseId === office.id);
-  const officeAlerts = alerts.filter((a) => a.oficinaId === office.id);
 
-  // Pronóstico de las próximas 4 franjas horarias
-  const currentSlotIndex = OPERATING_SLOTS.indexOf(currentSlotTime);
-  const next4Slots = OPERATING_SLOTS.slice(
-    Math.max(0, currentSlotIndex),
-    Math.min(OPERATING_SLOTS.length, currentSlotIndex + 4)
-  );
+  const currentSlotIndex = officeForecast.findIndex((f) => f.franja >= currentSlotTime);
+  const startIdx = currentSlotIndex >= 0 ? currentSlotIndex : 0;
+  const forecastNextHours = officeForecast.slice(startIdx, startIdx + 4).map((f) => ({
+    franja: f.franja,
+    llegadas: f.llegadasEsperadas,
+    esPico: f.esPico,
+    tramite: f.tramitePredominante,
+  }));
 
-  const forecastNextHours = next4Slots.map((slot) => {
-    const f = predictArrivals(office.id, 1, slot, false);
-    return {
-      franja: slot,
-      llegadas: f.llegadasEsperadas,
-      esPico: f.esPico,
-      tramite: f.tramitePredominante,
-    };
-  });
+  const dailyActivityData = dailyActivity;
 
-  // Datos simulados de actividad del día
-  const dailyActivityData = OPERATING_SLOTS.slice(0, Math.max(1, currentSlotIndex + 1)).map(
-    (slot) => {
-      const f = predictArrivals(office.id, 1, slot, false);
-      return {
-        franja: slot,
-        Atendidos: Math.round(f.llegadasEsperadas * 0.95),
-        EnEspera: Math.max(1, Math.round(f.llegadasEsperadas * 0.2)),
-      };
-    }
-  );
-
-  const handleRequestSupport = () => {
-    showToast(
-      `Solicitud de refuerzo virtual enviada para ${office.nombre}. El motor ha generado una propuesta de apoyo remoto.`,
-      'info'
-    );
+  const handleRequestSupport = async () => {
+    await requestOfficeSupport(office.id);
     navigate('/redistribucion');
   };
 
-  const handleReleaseStaff = () => {
-    showToast(
-      `Capacidad liberada en ${office.nombre}: 1 puesto puesto a disposición para apoyo a sedes con déficit.`,
-      'success'
-    );
+  const handleReleaseStaff = async () => {
+    await releaseOfficeStaff(office.id);
   };
 
   return (

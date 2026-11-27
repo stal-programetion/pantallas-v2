@@ -21,6 +21,7 @@ export const RedistributionPage: React.FC = () => {
     recommendations,
     acceptRedistribution,
     rejectRedistribution,
+    editRedistribution,
   } = useAppStore();
 
   const [filterModality, setFilterModality] = useState<string>('todos');
@@ -32,6 +33,10 @@ export const RedistributionPage: React.FC = () => {
 
   const totalMinutosAhorrados = recommendations.reduce(
     (acc, r) => acc + (r.estado === 'aceptada' ? r.impactoEstimado.reduccionEsperaMin : 0),
+    0
+  );
+  const potencialMinutosAhorrados = recommendations.reduce(
+    (acc, r) => acc + (r.estado === 'pendiente' ? r.impactoEstimado.reduccionEsperaMin : 0),
     0
   );
 
@@ -74,7 +79,7 @@ export const RedistributionPage: React.FC = () => {
 
         <KpiCard
           title="Espera Reducida Estimada"
-          value={`-${totalMinutosAhorrados > 0 ? totalMinutosAhorrados : 8.5} min`}
+          value={`-${(totalMinutosAhorrados > 0 ? totalMinutosAhorrados : potencialMinutosAhorrados).toFixed(1)} min`}
           subtitle="En sedes con déficit"
           icon={TrendingDown}
           iconBgColor="bg-emerald-50"
@@ -153,6 +158,7 @@ export const RedistributionPage: React.FC = () => {
                 recommendation={rec}
                 onAccept={() => acceptRedistribution(rec.id)}
                 onReject={() => rejectRedistribution(rec.id)}
+                onEdit={(data) => editRedistribution(rec.id, data)}
               />
             ))
           )}

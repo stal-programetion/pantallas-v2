@@ -70,8 +70,8 @@ export const LoginPage: React.FC = () => {
     },
   ];
 
-  const handleLogin = () => {
-    setRole(selectedRole);
+  const handleLogin = async () => {
+    await setRole(selectedRole);
     navigate('/dashboard');
   };
 

@@ -1,38 +1,25 @@
 import React from 'react';
-import { CreditCard, FileText, Flame, Users, Zap, Award } from 'lucide-react';
+import { CreditCard, FileText, Flame, Users } from 'lucide-react';
 import { TooltipWhy } from '../common/TooltipWhy';
+import { useAppStore } from '../../store/useAppStore';
+
+const COLORS = ['bg-blue-600', 'bg-orange-500', 'bg-emerald-600', 'bg-slate-400'];
+const ICONS = [CreditCard, FileText, Flame, Users];
 
 export const UserBehaviorWidget: React.FC<{ bare?: boolean }> = ({ bare = false }) => {
-  const tramites = [
-    {
-      nombre: 'Facturación y Acuerdos de Pago',
-      porcentaje: 47,
-      color: 'bg-blue-600',
-      icon: CreditCard,
-      tiempoMedio: '6.5 min',
-    },
-    {
-      nombre: 'Peticiones, Quejas y Reclamos (PQR)',
-      porcentaje: 28,
-      color: 'bg-orange-500',
-      icon: FileText,
-      tiempoMedio: '11.0 min',
-    },
-    {
-      nombre: 'Financiación Brilla & Conexiones',
-      porcentaje: 19,
-      color: 'bg-emerald-600',
-      icon: Flame,
-      tiempoMedio: '13.5 min',
-    },
-    {
-      nombre: 'Otros y Duplicados',
-      porcentaje: 6,
-      color: 'bg-slate-400',
-      icon: Users,
-      tiempoMedio: '4.0 min',
-    },
-  ];
+  const { userBehavior } = useAppStore();
+
+  const tramites = (userBehavior?.tramites || []).map((t, idx) => ({
+    nombre: t.nombre,
+    porcentaje: t.porcentaje,
+    color: COLORS[idx % COLORS.length],
+    icon: ICONS[idx % ICONS.length],
+    tiempoMedio: `${t.tiempoMedioMin.toFixed(1)} min`,
+  }));
+
+  const picoMatutino = userBehavior?.picoMatutino || '08:00 - 10:30';
+  const tasaAbandono = userBehavior?.tasaAbandonoPorcentaje ?? 7.0;
+  const metaAbandono = userBehavior?.metaAbandonoPorcentaje ?? 3.0;
 
   return (
     <div className={bare ? 'flex flex-col justify-between' : 'bg-white rounded-2xl border border-slate-200 p-5 flex flex-col justify-between'}>
@@ -46,7 +33,7 @@ export const UserBehaviorWidget: React.FC<{ bare?: boolean }> = ({ bare = false 
           </div>
 
           <TooltipWhy
-            explanation="La mezcla de trámites impacta el tiempo de servicio (mu). En quincena, Facturación y Acuerdos de Pago domina el 47% de los turnos, lo que agiliza la atención media a 7.8 minutos por usuario."
+            explanation="La mezcla de trámites impacta el tiempo de servicio (μ). En la aproximación analítica Erlang C/A se consolida la mezcla observada por sede y franja en Digiturno."
             rule="Teoría de Colas Multitasa"
             align="right"
           />
@@ -87,13 +74,15 @@ export const UserBehaviorWidget: React.FC<{ bare?: boolean }> = ({ bare = false 
           <span className="text-[10px] text-blue-700 font-semibold block uppercase tracking-wider">
             Pico Matutino
           </span>
-          <span className="text-xs font-bold text-slate-900 mt-0.5 block">09:30 - 11:30</span>
+          <span className="text-xs font-bold text-slate-900 mt-0.5 block">{picoMatutino}</span>
         </div>
         <div className="p-2 rounded-lg bg-orange-50/60 border border-orange-100">
           <span className="text-[10px] text-orange-700 font-semibold block uppercase tracking-wider">
             Tasa de Abandono
           </span>
-          <span className="text-xs font-bold text-slate-900 mt-0.5 block">1.3% (Meta &lt;3%)</span>
+          <span className="text-xs font-bold text-slate-900 mt-0.5 block">
+            {tasaAbandono}% (Meta &lt;{metaAbandono}%)
+          </span>
         </div>
       </div>
     </div>

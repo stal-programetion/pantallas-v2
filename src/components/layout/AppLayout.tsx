@@ -4,23 +4,22 @@ import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { CommandPalette } from './CommandPalette';
 import { useAppStore } from '../../store/useAppStore';
-import { CheckCircle2, AlertTriangle, AlertCircle, Info, X } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, AlertCircle, Info, X, RefreshCw } from 'lucide-react';
 
 export const AppLayout: React.FC = () => {
-  const { init, toastMessage, clearToast } = useAppStore();
+  const { init, disconnectRealtime, error, toastMessage, clearToast } = useAppStore();
   const location = useLocation();
 
-  const [menuOpen, setMenuOpen] = useState(false); // el menú arranca cerrado
+  const [menuOpen, setMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     init();
-  }, [init]);
+    return () => disconnectRealtime();
+  }, [init, disconnectRealtime]);
 
-  // Cerrar el menú al navegar
   useEffect(() => setMenuOpen(false), [location.pathname]);
 
-  // Atajo global Ctrl/Cmd + K
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -55,6 +54,24 @@ export const AppLayout: React.FC = () => {
 
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
           <div key={location.pathname} className="max-w-[1400px] mx-auto anim-up">
+            {error && (
+              <div
+                role="alert"
+                className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 flex items-center justify-between gap-4"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertCircle size={18} className="text-rose-600 shrink-0" />
+                  <span>Error de conexión con el servidor: {error}</span>
+                </div>
+                <button
+                  onClick={() => init()}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-800 text-white text-xs font-semibold"
+                >
+                  <RefreshCw size={13} />
+                  Reintentar
+                </button>
+              </div>
+            )}
             <Outlet />
           </div>
         </main>

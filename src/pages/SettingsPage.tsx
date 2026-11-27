@@ -1,42 +1,79 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  Settings,
   Database,
   Building2,
   Users,
   Shield,
-  Activity,
   CheckCircle2,
   AlertCircle,
-  Wifi,
-  WifiOff,
   RefreshCw,
-  Plus,
   Edit2,
   Save,
-  Flame,
+  Upload,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
-import { digiturnoService, DigiturnoConnectionStatus } from '../services';
-import { Office, Staff } from '../types';
+import { apiCatalogService, digiturnoService, DigiturnoConnectionStatus } from '../services';
+import { Office } from '../types';
 import { Modal } from '../components/common/Modal';
 
 export const SettingsPage: React.FC = () => {
-  const { offices, staff, sourceMode, setSourceMode, showToast } = useAppStore();
+  const { offices, staff, sourceMode, systemRules, init, setSourceMode, updateOffice, updateRules, showToast } =
+    useAppStore();
   const { canEditSettings } = useAuthStore();
 
   const [activeTab, setActiveTab] = useState<'digiturno' | 'oficinas' | 'colaboradores' | 'reglas'>('digiturno');
 
-  // Connection testing state
+  // Connection testing & ETL upload state
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<DigiturnoConnectionStatus | null>(null);
+  const [uploadingEtl, setUploadingEtl] = useState(false);
+  const [etlSummary, setEtlSummary] = useState<{
+    filename: string;
+    totalRows: number;
+    insertedRows: number;
+    skippedDuplicates: number;
+    cleanedServiceOutliers: number;
+    officesCount: number;
+    operatorsCount: number;
+    warnings: string[];
+  } | null>(null);
+  const etlInputRef = useRef<HTMLInputElement>(null);
+
+  const handleUploadDigiturnoExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingEtl(true);
+    try {
+      const report = await apiCatalogService.importDigiturnoExcel(file);
+      setEtlSummary(report);
+      await init();
+      showToast(
+        `ETL Digiturno completado: ${report.insertedRows} turnos importados (${report.skippedDuplicates} duplicados omitidos).`,
+        'success'
+      );
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error importando archivo Digiturno', 'error');
+    } finally {
+      setUploadingEtl(false);
+      e.target.value = '';
+    }
+  };
 
   // SLA and rule parameters
   const [targetSla, setTargetSla] = useState(80);
   const [maxWaitMin, setMaxWaitMin] = useState(10);
   const [maxPresencialKm, setMaxPresencialKm] = useState(45);
   const [lunchDuration, setLunchDuration] = useState(60);
+
+  useEffect(() => {
+    if (systemRules) {
+      setTargetSla(Math.round(systemRules.targetSla * 100));
+      setMaxWaitMin(systemRules.maxWaitMin);
+      setMaxPresencialKm(systemRules.maxPresencialKm);
+      setLunchDuration(systemRules.lunchDurationMin);
+    }
+  }, [systemRules]);
 
   // Edit Office Modal
   const [editingOffice, setEditingOffice] = useState<Office | null>(null);
@@ -54,12 +91,25 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleSaveOffice = (e: React.FormEvent) => {
+  const handleSaveOffice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (editingOffice) {
-      showToast(`Oficina ${editingOffice.nombre} actualizada correctamente`, 'success');
+      await updateOffice(editingOffice.id, {
+        nombre: editingOffice.nombre,
+        capacidadPuestos: editingOffice.capacidadPuestos,
+        ciudad: editingOffice.ciudad,
+      });
       setEditingOffice(null);
     }
+  };
+
+  const handleSaveRules = async () => {
+    await updateRules({
+      targetSla: targetSla / 100,
+      maxWaitMin,
+      maxPresencialKm,
+      lunchDurationMin: lunchDuration,
+    });
   };
 
   return (
@@ -91,11 +141,10 @@ export const SettingsPage: React.FC = () => {
       <div className="flex border-b border-slate-200 bg-white rounded-xl p-1 shadow-2xs gap-1">
         <button
           onClick={() => setActiveTab('digiturno')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-            activeTab === 'digiturno'
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeTab === 'digiturno'
               ? 'bg-blue-800 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
+            }`}
         >
           <Database size={15} />
           <span>Conector Digiturno</span>
@@ -103,11 +152,10 @@ export const SettingsPage: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('oficinas')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-            activeTab === 'oficinas'
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeTab === 'oficinas'
               ? 'bg-blue-800 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
+            }`}
         >
           <Building2 size={15} />
           <span>Oficinas ({offices.length})</span>
@@ -115,11 +163,10 @@ export const SettingsPage: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('colaboradores')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-            activeTab === 'colaboradores'
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeTab === 'colaboradores'
               ? 'bg-blue-800 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
+            }`}
         >
           <Users size={15} />
           <span>Colaboradores ({staff.length})</span>
@@ -127,11 +174,10 @@ export const SettingsPage: React.FC = () => {
 
         <button
           onClick={() => setActiveTab('reglas')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-            activeTab === 'reglas'
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${activeTab === 'reglas'
               ? 'bg-blue-800 text-white shadow-xs'
               : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
+            }`}
         >
           <Shield size={15} />
           <span>Reglas Laborales y SLA</span>
@@ -171,11 +217,10 @@ export const SettingsPage: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <label
                 onClick={() => setSourceMode('mock')}
-                className={`flex items-start gap-3 p-3.5 rounded-xl border cursor-pointer transition-all ${
-                  sourceMode === 'mock'
+                className={`flex items-start gap-3 p-3.5 rounded-xl border cursor-pointer transition-all ${sourceMode === 'mock'
                     ? 'border-blue-700 bg-blue-50/80 ring-2 ring-blue-500/20'
                     : 'border-slate-200 bg-white hover:bg-slate-50'
-                }`}
+                  }`}
               >
                 <input
                   type="radio"
@@ -196,11 +241,10 @@ export const SettingsPage: React.FC = () => {
 
               <label
                 onClick={() => setSourceMode('real')}
-                className={`flex items-start gap-3 p-3.5 rounded-xl border cursor-pointer transition-all ${
-                  sourceMode === 'real'
+                className={`flex items-start gap-3 p-3.5 rounded-xl border cursor-pointer transition-all ${sourceMode === 'real'
                     ? 'border-blue-700 bg-blue-50/80 ring-2 ring-blue-500/20'
                     : 'border-slate-200 bg-white hover:bg-slate-50'
-                }`}
+                  }`}
               >
                 <input
                   type="radio"
@@ -224,11 +268,10 @@ export const SettingsPage: React.FC = () => {
           {/* Connection Test Results Box */}
           {connectionStatus && (
             <div
-              className={`p-4 rounded-xl border text-xs space-y-2 ${
-                connectionStatus.connected
+              className={`p-4 rounded-xl border text-xs space-y-2 ${connectionStatus.connected
                   ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
                   : 'bg-amber-50 border-amber-300 text-amber-950'
-              }`}
+                }`}
             >
               <div className="flex items-center gap-2 font-bold">
                 {connectionStatus.connected ? (
@@ -245,6 +288,47 @@ export const SettingsPage: React.FC = () => {
               </div>
             </div>
           )}
+
+          {/* Carga ETL Excel Digiturno */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-xs font-bold text-slate-800 block">
+                  Carga Histórica de Turnos Digiturno (.xlsx)
+                </span>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Importación idempotente (hoja Mayo 2026) con validación de fechas colombianas y reporte de calidad.
+                </p>
+              </div>
+              <input
+                ref={etlInputRef}
+                type="file"
+                accept=".xlsx"
+                className="hidden"
+                onChange={handleUploadDigiturnoExcel}
+              />
+              <button
+                type="button"
+                disabled={uploadingEtl}
+                onClick={() => etlInputRef.current?.click()}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-white hover:bg-slate-100 border border-slate-300 text-slate-800 rounded-xl text-xs font-bold cursor-pointer shrink-0"
+              >
+                <Upload size={14} />
+                <span>{uploadingEtl ? 'Importando...' : 'Importar Excel Digiturno'}</span>
+              </button>
+            </div>
+
+            {etlSummary && (
+              <div className="p-3 rounded-lg bg-white border border-slate-200 text-[11px] grid grid-cols-2 sm:grid-cols-3 gap-2 font-mono text-slate-700">
+                <div>Filas leídas: <strong>{etlSummary.totalRows}</strong></div>
+                <div>Insertados: <strong className="text-emerald-700">{etlSummary.insertedRows}</strong></div>
+                <div>Duplicados omitidos: <strong>{etlSummary.skippedDuplicates}</strong></div>
+                <div>Atípicos limpiados: <strong>{etlSummary.cleanedServiceOutliers}</strong></div>
+                <div>Oficinas: <strong>{etlSummary.officesCount}</strong></div>
+                <div>Operadores (seudon.): <strong>{etlSummary.operatorsCount}</strong></div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -446,7 +530,7 @@ export const SettingsPage: React.FC = () => {
 
           <div className="flex justify-end pt-3">
             <button
-              onClick={() => showToast('Parámetros guardados correctamente', 'success')}
+              onClick={handleSaveRules}
               className="px-5 py-2.5 bg-blue-800 hover:bg-blue-900 text-white rounded-xl text-xs font-bold shadow-xs cursor-pointer flex items-center gap-2"
             >
               <Save size={15} />

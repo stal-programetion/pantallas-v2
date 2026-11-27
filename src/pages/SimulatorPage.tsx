@@ -23,13 +23,12 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { useAppStore } from '../store/useAppStore';
-import { motorService, SimulationResult } from '../services';
+import { apiMotorService, type ExtendedSimulationResult } from '../services';
 import { TooltipWhy } from '../components/common/TooltipWhy';
-import { evaluateErlangC } from '../engine/erlangC';
 
 export const SimulatorPage: React.FC = () => {
   const navigate = useNavigate();
-  const { offices, staff, absences, showToast } = useAppStore();
+  const { offices, staff, absences, selectedDate, init, showToast } = useAppStore();
 
   // Simulation Parameters
   const [demandMultiplier, setDemandMultiplier] = useState<number>(1.2); // +20%
@@ -37,47 +36,46 @@ export const SimulatorPage: React.FC = () => {
   const [targetSla, setTargetSla] = useState<number>(0.8);
   const [selectedOfficeFilter, setSelectedOfficeFilter] = useState<string>('cartagena-chambacu');
 
-  const [simResult, setSimResult] = useState<SimulationResult | null>(null);
+  const [simResult, setSimResult] = useState<ExtendedSimulationResult | null>(null);
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
 
   const runSimulationAsync = async () => {
     setIsSimulating(true);
-    const res = await motorService.runSimulation(
-      {
-        additionalAbsences,
-        demandMultiplier,
-        targetSla,
-        officeIdFilter: selectedOfficeFilter === 'todos' ? undefined : selectedOfficeFilter,
-      },
-      offices,
-      staff,
-      absences
-    );
-    setSimResult(res);
-    setIsSimulating(false);
+    try {
+      const res = await apiMotorService.runSimulation(
+        {
+          additionalAbsences,
+          demandMultiplier,
+          targetSla,
+          officeIdFilter: selectedOfficeFilter === 'todos' ? undefined : selectedOfficeFilter,
+        },
+        offices,
+        staff,
+        absences
+      );
+      setSimResult(res);
+    } finally {
+      setIsSimulating(false);
+    }
   };
 
   useEffect(() => {
     runSimulationAsync();
   }, [demandMultiplier, additionalAbsences, targetSla, selectedOfficeFilter]);
 
-  // Curva teórica Erlang C (SL vs Agentes) para la oficina seleccionada
   const officeForCurve = offices.find((o) => o.id === selectedOfficeFilter) || offices[0];
-  const lambdaSim = 26 * demandMultiplier; // base lambda
-  const erlangCurveData = Array.from({ length: 8 }, (_, i) => {
-    const agents = i + 1;
-    const res = evaluateErlangC(lambdaSim, 8.5, agents, 10);
-    return {
-      agentes: `${agents} Agentes`,
-      c: agents,
-      nivelServicio: Math.round(res.nivelServicio * 100),
-      esperaMin: Number(res.tiempoEsperaPromedioMin.toFixed(1)),
-    };
-  });
+  const erlangCurveData = simResult?.curvaErlang || [];
 
-  const handleApplyScenario = () => {
+  const handleApplyScenario = async () => {
+    await apiMotorService.applyScenario(selectedDate, {
+      additionalAbsences,
+      demandMultiplier,
+      targetSla,
+      officeIdFilter: selectedOfficeFilter === 'todos' ? undefined : selectedOfficeFilter,
+    });
+    await init();
     showToast(
-      `Escenario aplicado: Demanda multiplicada por ${Math.round(
+      `Escenario aplicado: Demanda x${Math.round(
         demandMultiplier * 100
       )}% y SLA objetivo ${Math.round(targetSla * 100)}%. Redirigiendo a Plan del Día...`,
       'success'
@@ -271,6 +269,12 @@ export const SimulatorPage: React.FC = () => {
                       {simResult?.totalAgentesActuales || 32} puestos
                     </span>
                   </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Tasa de Abandono (SimPy):</span>
+                    <span className="font-bold text-slate-800">
+                      {simResult?.abandonoActualPorcentaje ?? 3.1}%
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -309,9 +313,19 @@ export const SimulatorPage: React.FC = () => {
                       {simResult?.totalAgentesSimulados || 36} puestos
                     </span>
                   </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-700 font-semibold">Abandono Proyectado (SimPy):</span>
+                    <span className="font-bold text-rose-700">
+                      {simResult?.abandonoSimuladoPorcentaje ?? 6.8}%
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
+
+            <p className="text-[11px] text-slate-500">
+              Nota de modelado: Erlang C/A evalúa la mezcla agregada por franja de 30 min asumiendo servicio homogéneo; SimPy simula llegadas estocásticas con paciencia finita calibrada al abandono histórico.
+            </p>
 
             {/* Erlang C Curve Chart */}
             <div className="pt-2">
@@ -320,7 +334,7 @@ export const SimulatorPage: React.FC = () => {
                   Curva de Capacidad Erlang C: Nivel de Servicio vs. Número de Agentes
                 </h4>
                 <span className="text-[11px] text-slate-400 font-mono">
-                  Sede: {officeForCurve.nombre}
+                  Sede: {officeForCurve?.nombre || 'Red'}
                 </span>
               </div>
 

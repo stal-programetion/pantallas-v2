@@ -1,9 +1,12 @@
 import { create } from 'zustand';
 import type { User, UserRole } from '../types';
+import { apiAuthService, configureHttpAuth } from '../services';
 
 interface AuthState {
   currentUser: User;
-  setRole: (role: UserRole) => void;
+  token: string | null;
+  initSession: () => Promise<void>;
+  setRole: (role: UserRole) => Promise<void>;
   canViewHealthData: () => boolean;
   canApprovePlan: () => boolean;
   canEditSettings: () => boolean;
@@ -35,10 +38,27 @@ const ROLES_DATA: Record<UserRole, User> = {
 };
 
 export const useAuthStore = create<AuthState>((set, get) => ({
-  currentUser: ROLES_DATA.COORDINADOR, // Rol operativo por defecto
+  currentUser: ROLES_DATA.COORDINADOR,
+  token: null,
 
-  setRole: (role: UserRole) => {
+  initSession: async () => {
+    const role = get().currentUser.rol;
+    try {
+      const session = await apiAuthService.createDemoSession(role);
+      set({ currentUser: session.user, token: session.accessToken });
+    } catch {
+      // Si el backend no tiene demo switch habilitado, mantiene usuario actual
+    }
+  },
+
+  setRole: async (role: UserRole) => {
     set({ currentUser: ROLES_DATA[role] });
+    try {
+      const session = await apiAuthService.createDemoSession(role);
+      set({ currentUser: session.user, token: session.accessToken });
+    } catch {
+      // Fallback silencioso
+    }
   },
 
   canViewHealthData: () => {
@@ -61,3 +81,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     return role === 'ADMIN' || role === 'COORDINADOR';
   },
 }));
+
+configureHttpAuth(
+  () => useAuthStore.getState().token,
+  () => useAuthStore.getState().currentUser.rol
+);

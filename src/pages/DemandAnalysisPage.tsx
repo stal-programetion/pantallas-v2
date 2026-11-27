@@ -1,13 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  BarChart3,
   Flame,
-  Calendar,
-  Clock,
   Building2,
-  TrendingUp,
-  Download,
-  Sparkles,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -22,80 +16,72 @@ import {
   Line,
 } from 'recharts';
 import { useAppStore } from '../store/useAppStore';
-import { OPERATING_SLOTS, predictArrivals } from '../engine/forecast';
+import { apiMotorService } from '../services';
 import { TooltipWhy } from '../components/common/TooltipWhy';
 
 export const DemandAnalysisPage: React.FC = () => {
-  const { offices } = useAppStore();
+  const { offices, operatingSlots } = useAppStore();
   const [selectedOfficeId, setSelectedOfficeId] = useState<string>('cartagena-chambacu');
   const [compareOfficeId, setCompareOfficeId] = useState<string>('monteria-centro');
 
-  const daysOfWeek = [
-    { num: 1, name: 'Lunes' },
-    { num: 2, name: 'Martes' },
-    { num: 3, name: 'Miércoles' },
-    { num: 4, name: 'Jueves' },
-    { num: 5, name: 'Viernes' },
-  ];
+  const [slotsHeader, setSlotsHeader] = useState<string[]>(operatingSlots);
+  const [heatmapData, setHeatmapData] = useState<
+    Array<{ dayName: string; dayNum: number; slots: Array<{ slot: string; demand: number; isPeak: boolean }> }>
+  >([]);
+  const [fortnightComparisonData, setFortnightComparisonData] = useState<Array<Record<string, any>>>([]);
+  const [officeComparisonData, setOfficeComparisonData] = useState<Array<Record<string, any>>>([]);
 
-  // Generar datos para el mapa de calor (Día x Franja)
-  const heatmapData = daysOfWeek.map((day) => {
-    return {
-      dayName: day.name,
-      dayNum: day.num,
-      slots: OPERATING_SLOTS.map((slot) => {
-        const forecast = predictArrivals(selectedOfficeId, day.num, slot, false);
-        return {
-          slot,
-          demand: forecast.llegadasEsperadas,
-          isPeak: forecast.esPico,
-        };
-      }),
-    };
-  });
-
-  // Comparativa de franjas: Día Estándar vs Día de Quincena
-  const fortnightComparisonData = OPERATING_SLOTS.map((slot) => {
-    const normal = predictArrivals(selectedOfficeId, 1, slot, false);
-    const fortnight = predictArrivals(selectedOfficeId, 1, slot, true);
-
-    return {
-      franja: slot,
-      'Día Estándar': normal.llegadasEsperadas,
-      'Día de Quincena (+32%)': fortnight.llegadasEsperadas,
-    };
-  });
-
-  // Comparativa entre dos oficinas
-  const officeComparisonData = OPERATING_SLOTS.map((slot) => {
-    const off1 = predictArrivals(selectedOfficeId, 1, slot, true);
-    const off2 = predictArrivals(compareOfficeId, 1, slot, true);
-
+  useEffect(() => {
+    let active = true;
     const name1 = offices.find((o) => o.id === selectedOfficeId)?.ciudad || 'Oficina 1';
     const name2 = offices.find((o) => o.id === compareOfficeId)?.ciudad || 'Oficina 2';
 
-    return {
-      franja: slot,
-      [name1]: off1.llegadasEsperadas,
-      [name2]: off2.llegadasEsperadas,
+    Promise.all([
+      apiMotorService.getHeatmap(selectedOfficeId, false),
+      apiMotorService.getFortnightComparison(selectedOfficeId, 1),
+      apiMotorService.getOfficeComparison(selectedOfficeId, compareOfficeId, 1, true),
+    ])
+      .then(([heatmap, fnComp, offComp]) => {
+        if (!active) return;
+        setSlotsHeader(heatmap.operatingSlots);
+        setHeatmapData(heatmap.rows);
+        setFortnightComparisonData(
+          fnComp.map((row) => ({
+            franja: row.franja,
+            'Día Estándar': row.diaEstandar,
+            'Día de Quincena (+32%)': row.diaQuincena,
+          }))
+        );
+        setOfficeComparisonData(
+          offComp.map((row) => ({
+            franja: row.franja,
+            [name1]: row.officeA,
+            [name2]: row.officeB,
+          }))
+        );
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
     };
-  });
+  }, [selectedOfficeId, compareOfficeId, offices]);
 
   const getHeatmapColor = (demand: number) => {
-    if (demand >= 18) return 'bg-orange-600 text-white font-bold';
-    if (demand >= 14) return 'bg-orange-500 text-white font-bold';
-    if (demand >= 10) return 'bg-amber-400 text-slate-900 font-semibold';
-    if (demand >= 7) return 'bg-blue-200 text-blue-900';
-    if (demand >= 4) return 'bg-blue-100 text-blue-800';
+    if (demand >= 14) return 'bg-orange-600 text-white font-bold';
+    if (demand >= 10) return 'bg-orange-500 text-white font-bold';
+    if (demand >= 7) return 'bg-amber-400 text-slate-900 font-semibold';
+    if (demand >= 4) return 'bg-blue-200 text-blue-900';
+    if (demand >= 2) return 'bg-blue-100 text-blue-800';
     return 'bg-slate-100 text-slate-600';
   };
 
   const selectedOfficeName = offices.find((o) => o.id === selectedOfficeId)?.nombre;
   const compareOfficeName = offices.find((o) => o.id === compareOfficeId)?.nombre;
+  const gridTemplate = `100px repeat(${Math.max(1, slotsHeader.length)}, minmax(0, 1fr))`;
 
   return (
     <div className="space-y-6">
-      {/* Title */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
           <div className="flex items-center gap-2">
@@ -103,7 +89,7 @@ export const DemandAnalysisPage: React.FC = () => {
               Análisis Histórico de Demanda y Patrones Digiturno
             </h1>
             <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">
-              3 Meses Histórico
+              Histórico Digiturno
             </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
@@ -112,12 +98,11 @@ export const DemandAnalysisPage: React.FC = () => {
         </div>
 
         <TooltipWhy
-          explanation="El pronóstico calcula la demanda histórica ponderando los últimos 90 días de atención en ventanilla Digiturno, ajustando por estacionalidad de pagos quincenales (+32%) y distribución horaria."
+          explanation="El pronóstico calcula la demanda histórica por oficina, día de la semana y franja de 30 minutos con intervalos de confianza, ajustando por estacionalidad de pagos quincenales (+32%)."
           rule="Modelo Predictivo Ponderado Surtigas"
         />
       </div>
 
-      {/* Selectors Bar */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-2">
           <Building2 size={16} className="text-blue-800" />
@@ -151,7 +136,6 @@ export const DemandAnalysisPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Heatmap: Día de la Semana x Franja Horaria */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
         <div className="flex items-center justify-between pb-2 border-b border-slate-100">
           <div>
@@ -163,7 +147,6 @@ export const DemandAnalysisPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Scale Legend */}
           <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600">
             <span>Baja</span>
             <span className="w-4 h-3 rounded-xs bg-slate-100" />
@@ -176,21 +159,23 @@ export const DemandAnalysisPage: React.FC = () => {
         </div>
 
         <div className="overflow-x-auto">
-          <div className="min-w-[900px]">
-            {/* Header Slots */}
-            <div className="grid grid-cols-[100px_repeat(17,1fr)] gap-1 text-[11px] font-bold text-slate-600 mb-1 text-center font-mono">
+          <div className="min-w-[960px]">
+            <div
+              className="grid gap-1 text-[11px] font-bold text-slate-600 mb-1 text-center font-mono"
+              style={{ gridTemplateColumns: gridTemplate }}
+            >
               <div className="text-left font-sans pl-2">Día</div>
-              {OPERATING_SLOTS.map((s) => (
+              {slotsHeader.map((s) => (
                 <div key={s}>{s}</div>
               ))}
             </div>
 
-            {/* Heatmap Grid */}
             <div className="space-y-1">
               {heatmapData.map((row) => (
                 <div
                   key={row.dayName}
-                  className="grid grid-cols-[100px_repeat(17,1fr)] gap-1 items-center text-xs"
+                  className="grid gap-1 items-center text-xs"
+                  style={{ gridTemplateColumns: gridTemplate }}
                 >
                   <div className="font-bold text-slate-800 text-xs pl-2">{row.dayName}</div>
                   {row.slots.map((cell) => (
@@ -211,9 +196,7 @@ export const DemandAnalysisPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Two Comparison Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Chart 1: Fortnight Impact */}
         <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
           <div>
             <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
@@ -248,7 +231,6 @@ export const DemandAnalysisPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Chart 2: Office vs Office */}
         <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
           <div>
             <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">

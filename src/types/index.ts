@@ -158,6 +158,8 @@ export interface RedistributionRecommendation {
     reduccionEsperaMin: number;
     slaProyectadoDestino: number;
     slaOrigenResultante: number;
+    abandonoAntesPct?: number;
+    abandonoDespuesPct?: number;
   };
   estado: 'pendiente' | 'aceptada' | 'rechazada';
 }

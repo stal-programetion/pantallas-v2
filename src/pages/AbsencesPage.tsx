@@ -1,36 +1,49 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
-  UserX,
   Plus,
-  ShieldCheck,
-  Calendar,
-  Clock,
   Trash2,
-  AlertTriangle,
-  Building2,
   Sparkles,
   Lock,
-  ArrowRight,
   CheckCircle2,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
-import { Absence, AbsenceType } from '../types';
+import { AbsenceType } from '../types';
 import { StatusBadge } from '../components/common/StatusBadge';
 import { Modal } from '../components/common/Modal';
 import { TooltipWhy } from '../components/common/TooltipWhy';
+import { apiAusenciasService, apiDownload } from '../services';
 
 export const AbsencesPage: React.FC = () => {
   const {
     absences,
     staff,
     offices,
+    selectedDate,
+    init,
     createAbsence,
     removeAbsence,
     showToast,
   } = useAppStore();
 
-  const { canViewHealthData, currentUser } = useAuthStore();
+  const { canViewHealthData } = useAuthStore();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const res = await apiAusenciasService.importAbsencesExcel(file, selectedDate);
+      await init();
+      showToast(`Importadas ${res.inserted} ausencias desde Excel; malla recalculada.`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error importando Excel de ausencias', 'error');
+    } finally {
+      e.target.value = '';
+    }
+  };
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [filterType, setFilterType] = useState<string>('todos');
@@ -98,6 +111,30 @@ export const AbsencesPage: React.FC = () => {
             explanation="La información médica y diagnósticos CIE-10 está restringida bajo la Ley 1581 y directrices de Salud y Seguridad en el Trabajo. Solo usuarios Administradores y Coordinadores de Turnos tienen permiso de visualización."
             rule="Confidencialidad de Datos de Salud"
           />
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx"
+            className="hidden"
+            onChange={handleImportExcel}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="inline-flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+          >
+            <Upload size={14} />
+            <span>Importar Excel</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => apiDownload('/absences/export', 'Ausencias_Surtigas.xlsx')}
+            className="inline-flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 rounded-xl text-xs font-semibold cursor-pointer"
+          >
+            <Download size={14} />
+            <span>Exportar Excel</span>
+          </button>
 
           <button
             onClick={() => setIsModalOpen(true)}

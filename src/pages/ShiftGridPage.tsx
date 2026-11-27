@@ -2,18 +2,14 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAppStore } from '../store/useAppStore';
 import { useAuthStore } from '../store/useAuthStore';
-import { OPERATING_SLOTS, predictArrivals } from '../engine/forecast';
-import { calculateRequiredAgents } from '../engine/erlangC';
-import { validateShiftSlotChange } from '../engine/assignmentEngine';
+import { apiDownload, apiTurnosService } from '../services';
 import type { Office, SlotStatus, Staff } from '../types';
 
 /* ------------------------------------------------------------------ */
 /*  Constantes del diseño aprobado                                     */
 /* ------------------------------------------------------------------ */
 
-/** Día de la semana que usa el motor del store para generar el plan (jueves). */
-const DAY_OF_WEEK = 4;
-const PEAK = ['10:00', '10:30', '11:00', '11:30'];
+const PEAK = ['08:30', '09:00', '09:30', '10:00', '14:00'];
 const isLunchSlot = (t: string) => t >= '12:00' && t <= '13:30';
 const isPeakSlot = (t: string) => PEAK.includes(t);
 
@@ -183,7 +179,8 @@ export const ShiftGridPage: React.FC = () => {
     staff,
     currentPlan,
     selectedDate,
-    isFortnight,
+    operatingSlots,
+    requiredAgentsByOffice,
     isLoading,
     updateSlot,
     resetPlanToProposal,
@@ -199,25 +196,8 @@ export const ShiftGridPage: React.FC = () => {
   const [tourOn, setTourOn] = useState<boolean>(readTour);
   const [step, setStep] = useState(0);
 
-  const slots = OPERATING_SLOTS;
-
-  /* ---- Personal necesario por franja: Erlang C del proyecto ---- */
-  const requiredByOffice = useMemo(() => {
-    const map: Record<string, number[]> = {};
-    offices.forEach((o) => {
-      map[o.id] = slots.map((t) => {
-        const f = predictArrivals(o.id, DAY_OF_WEEK, t, isFortnight);
-        return calculateRequiredAgents(
-          f.tasaLlegadasHora,
-          f.tiempoAtencionPromedioMin,
-          o.slaObjetivo,
-          o.tiempoEsperaMaxMin,
-          o.capacidadPuestos
-        ).requiredAgents;
-      });
-    });
-    return map;
-  }, [offices, isFortnight, slots]);
+  const slots = operatingSlots;
+  const requiredByOffice = requiredAgentsByOffice;
 
   /** Estado de una persona en una franja (con valor por defecto si el plan no la trae). */
   const stateOf = useCallback(
@@ -416,7 +396,7 @@ export const ShiftGridPage: React.FC = () => {
     if (!sel || !person || noChange || absentCell || applying || !canEdit) return;
     setApplying(true);
     try {
-      const v = validateShiftSlotChange(currentPlan, person.id, sel.t, pend, offices, staff);
+      const v = await apiTurnosService.validateSlot(selectedDate, person.id, sel.t, pend);
       if (!v.isValid) {
         showToast(v.warningMessage ?? 'No se puede aplicar este cambio.', 'error');
         return;
@@ -487,6 +467,12 @@ export const ShiftGridPage: React.FC = () => {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={() => apiDownload(`/plans/${selectedDate}/export?format=xlsx`, `Plan_Turnos_Surtigas_${selectedDate}.xlsx`)}
+            style={{ ...btnBase, fontSize: 14, fontWeight: 600, padding: '0 16px', border: '1px solid #b9c7da', background: '#fff', color: '#0f1b2d' }}
+          >
+            Exportar Excel
+          </button>
           {!tourOn && (
             <button
               onClick={showTour}

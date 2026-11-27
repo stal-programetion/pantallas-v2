@@ -50,9 +50,9 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
     isFortnight,
     toggleFortnight,
     alerts,
-    tickSimulation,
   } = useAppStore();
   const { currentUser, setRole } = useAuthStore();
+  const reloadAbsences = useAppStore((s) => s.reloadAbsences);
 
   const [isAlertDrawerOpen, setIsAlertDrawerOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -61,17 +61,13 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
   );
   const menuRef = useRef<HTMLDivElement>(null);
 
-  // Reloj + tick de simulación cada 5 s (misma lógica del boceto original)
+  // Reloj local (las métricas en vivo se reciben por SSE desde useAppStore)
   useEffect(() => {
     const clock = setInterval(() => {
       setTime(new Date().toLocaleTimeString('es-CO', { hour12: false, hour: '2-digit', minute: '2-digit' }));
     }, 15000);
-    const tick = setInterval(() => tickSimulation(), 5000);
-    return () => {
-      clearInterval(clock);
-      clearInterval(tick);
-    };
-  }, [tickSimulation]);
+    return () => clearInterval(clock);
+  }, []);
 
   // Cerrar menú de usuario al hacer clic fuera / Esc
   useEffect(() => {
@@ -118,9 +114,8 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
             )}
             <span
-              className={`relative inline-flex rounded-full h-2 w-2 ${
-                isSimulationPaused ? 'bg-amber-500' : 'bg-emerald-500'
-              }`}
+              className={`relative inline-flex rounded-full h-2 w-2 ${isSimulationPaused ? 'bg-amber-500' : 'bg-emerald-500'
+                }`}
             />
           </span>
           <span>{isSimulationPaused ? 'En pausa' : 'En vivo'}</span>
@@ -154,11 +149,10 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
           role="switch"
           aria-checked={isFortnight}
           title="Quincena: +32% de demanda por pagos y facturación"
-          className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium border transition-colors ${
-            isFortnight
+          className={`hidden sm:inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium border transition-colors ${isFortnight
               ? 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100'
               : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-          }`}
+            }`}
         >
           <Flame size={15} className={isFortnight ? 'text-orange-500' : 'text-slate-400'} />
           <span>Quincena</span>
@@ -220,8 +214,9 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
                   key={r}
                   role="menuitemradio"
                   aria-checked={currentUser.rol === r}
-                  onClick={() => {
-                    setRole(r);
+                  onClick={async () => {
+                    await setRole(r);
+                    await reloadAbsences();
                     setUserMenuOpen(false);
                   }}
                   className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm text-slate-700 hover:bg-slate-50"
@@ -253,11 +248,10 @@ export const Header: React.FC<HeaderProps> = ({ menuOpen, onToggleMenu, onOpenPa
           aria-controls="menu-principal"
           aria-label={menuOpen ? 'Cerrar menú' : 'Abrir menú'}
           title={menuOpen ? 'Cerrar menú' : 'Abrir menú'}
-          className={`w-11 h-11 inline-flex items-center justify-center rounded-xl border transition-colors ${
-            menuOpen
+          className={`w-11 h-11 inline-flex items-center justify-center rounded-xl border transition-colors ${menuOpen
               ? 'bg-[#1F2B6B] text-white border-[#1F2B6B]'
               : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-          }`}
+            }`}
         >
           {menuOpen ? <X size={20} /> : <Menu size={20} />}
         </button>

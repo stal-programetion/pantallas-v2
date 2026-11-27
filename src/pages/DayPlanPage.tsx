@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import confetti from 'canvas-confetti';
 import {
   CalendarCheck,
@@ -25,12 +26,14 @@ import { TrafficLight } from '../components/common/TrafficLight';
 import { RecommendationCard } from '../components/redistribution/RecommendationCard';
 
 export const DayPlanPage: React.FC = () => {
+  const navigate = useNavigate();
   const {
     currentPlan,
     absences,
     offices,
     staff,
     recommendations,
+    peaksSummary,
     approvePlan,
     acceptRedistribution,
     rejectRedistribution,
@@ -233,7 +236,7 @@ export const DayPlanPage: React.FC = () => {
               <span className="flex items-center gap-2">
                 <AlertCircle size={16} className="text-rose-600 shrink-0" />
                 <span>
-                  <strong>Impacto total:</strong> 4 ausencias concentran déficit crítico en Montería Centro, Caucasia y Sincelejo La Palma.
+                  <strong>Impacto total:</strong> {activeAbsences.length} {activeAbsences.length === 1 ? 'ausencia' : 'ausencias'} generan un déficit estimado de {activeAbsences.reduce((acc, a) => acc + (a.impactoEstimado?.deficitHoras || 7.5), 0)} horas en la red.
                 </span>
               </span>
               <span className="font-semibold text-rose-700">El motor activará traslados sugeridos en el Paso 4</span>
@@ -262,44 +265,34 @@ export const DayPlanPage: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
-                <span className="text-[11px] font-bold text-blue-800 uppercase tracking-wider block">
-                  Pico Matutino (Máxima Afluencia)
-                </span>
-                <div className="text-xl font-extrabold text-slate-900">09:30 - 11:30</div>
-                <p className="text-xs text-slate-600">
-                  Concentración de reclamos de facturación y PQR. Tasa de llegadas promedio: <strong>24.5 clientes/h</strong> en sedes principales.
-                </p>
-                <div className="pt-2 text-[11px] text-emerald-700 font-semibold flex items-center gap-1">
-                  <Check size={12} /> 100% de agentes en ventanilla requerido
+              {(peaksSummary?.blocks || []).map((block) => (
+                <div key={block.titulo} className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
+                  <span
+                    className={`text-[11px] font-bold uppercase tracking-wider block ${
+                      block.tone === 'orange'
+                        ? 'text-orange-700'
+                        : block.tone === 'indigo'
+                          ? 'text-indigo-700'
+                          : 'text-blue-800'
+                    }`}
+                  >
+                    {block.titulo}
+                  </span>
+                  <div className="text-xl font-extrabold text-slate-900">{block.rango}</div>
+                  <p className="text-xs text-slate-600">{block.descripcion}</p>
+                  <div
+                    className={`pt-2 text-[11px] font-semibold flex items-center gap-1 ${
+                      block.tone === 'orange'
+                        ? 'text-orange-700'
+                        : block.tone === 'indigo'
+                          ? 'text-indigo-700'
+                          : 'text-emerald-700'
+                    }`}
+                  >
+                    <Check size={12} /> {block.recomendacion}
+                  </div>
                 </div>
-              </div>
-
-              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
-                <span className="text-[11px] font-bold text-orange-700 uppercase tracking-wider block">
-                  Pico Mediodía (Pagos Rápidos)
-                </span>
-                <div className="text-xl font-extrabold text-slate-900">12:00 - 13:30</div>
-                <p className="text-xs text-slate-600">
-                  Usuarios aprovechan descanso laboral para cancelar facturas. Coincide con la ventana de almuerzo de colaboradores.
-                </p>
-                <div className="pt-2 text-[11px] text-orange-700 font-semibold flex items-center gap-1">
-                  <AlertCircle size={12} /> Requiere almuerzos escalonados estrictos
-                </div>
-              </div>
-
-              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
-                <span className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider block">
-                  Pico Vespertino (Financiación)
-                </span>
-                <div className="text-xl font-extrabold text-slate-900">14:30 - 15:30</div>
-                <p className="text-xs text-slate-600">
-                  Trámites de crédito Brilla y contratos de conexión nueva con tiempos de servicio mayores (13.5 min/cliente).
-                </p>
-                <div className="pt-2 text-[11px] text-indigo-700 font-semibold flex items-center gap-1">
-                  <Check size={12} /> Malla completa reincorporada
-                </div>
-              </div>
+              ))}
             </div>
 
             <div className="p-4 rounded-xl border border-slate-200 bg-white">
@@ -307,26 +300,15 @@ export const DayPlanPage: React.FC = () => {
                 Oficinas con mayor tensión operativa pronosticada para hoy:
               </h4>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                  <span className="font-bold text-slate-800">Sede Chambacú</span>
-                  <div className="text-slate-500 text-[11px]">28.6 cli/h en pico</div>
-                  <div className="text-blue-700 font-bold mt-1">Requiere 5 agentes</div>
-                </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                  <span className="font-bold text-slate-800">Montería Centro</span>
-                  <div className="text-slate-500 text-[11px]">24.2 cli/h en pico</div>
-                  <div className="text-orange-700 font-bold mt-1">Requiere 4 agentes (1 ausente)</div>
-                </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                  <span className="font-bold text-slate-800">Sincelejo La Palma</span>
-                  <div className="text-slate-500 text-[11px]">20.9 cli/h en pico</div>
-                  <div className="text-blue-700 font-bold mt-1">Requiere 4 agentes</div>
-                </div>
-                <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                  <span className="font-bold text-slate-800">Santa Marta Rodadero</span>
-                  <div className="text-slate-500 text-[11px]">18.7 cli/h en pico</div>
-                  <div className="text-blue-700 font-bold mt-1">Requiere 3 agentes</div>
-                </div>
+                {(peaksSummary?.tensionOffices || []).map((t) => (
+                  <div key={t.oficinaId} className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                    <span className="font-bold text-slate-800">{t.nombre}</span>
+                    <div className="text-slate-500 text-[11px]">{t.tasaLlegadasPico} cli/h en pico</div>
+                    <div className={`font-bold mt-1 ${t.ausentes > 0 ? 'text-orange-700' : 'text-blue-700'}`}>
+                      Requiere {t.agentesRequeridos} agentes{t.ausentes > 0 ? ` (${t.ausentes} ausente)` : ''}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
@@ -383,7 +365,7 @@ export const DayPlanPage: React.FC = () => {
                 <strong>Regla de Continuidad Operativa:</strong> Ninguna de las 14 sedes cerrará durante la ventana de almuerzo (12:00 a 14:30).
               </span>
               <button
-                onClick={() => (window.location.href = '/malla')}
+                onClick={() => navigate('/malla')}
                 className="text-blue-800 hover:text-blue-950 font-bold underline cursor-pointer"
               >
                 Ver en Malla Interactiva
@@ -497,7 +479,7 @@ export const DayPlanPage: React.FC = () => {
               <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-600">
                 <span className="flex items-center gap-1.5">
                   <ShieldCheck size={15} className="text-blue-700" />
-                  Garantía de cumplimiento CREG: SLA ponderado proyectado de red: <strong>83.4%</strong>.
+                  Garantía de cumplimiento CREG: SLA ponderado proyectado de red: <strong>{Math.round((currentPlan?.slaProyectadoRed ?? 0.834) * 1000) / 10}%</strong>.
                 </span>
                 <span className="font-mono text-slate-400 text-[11px]">ID: {currentPlan?.id}</span>
               </div>

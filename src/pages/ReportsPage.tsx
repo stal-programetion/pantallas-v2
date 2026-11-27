@@ -1,71 +1,37 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  FileSpreadsheet,
   Download,
-  Calendar,
   CheckCircle2,
   Clock,
-  TrendingDown,
-  TrendingUp,
-  Award,
   Zap,
-  Building2,
   Users,
 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 import { KpiCard } from '../components/common/KpiCard';
 import { TrafficLight } from '../components/common/TrafficLight';
-import { TooltipWhy } from '../components/common/TooltipWhy';
+import { apiCatalogService, apiDownload, type ReportSummaryResponse } from '../services';
 
 export const ReportsPage: React.FC = () => {
   const { offices, liveMetrics, showToast } = useAppStore();
   const [dateRange, setDateRange] = useState<string>('30d');
+  const [summary, setSummary] = useState<ReportSummaryResponse | null>(null);
 
-  // Función para exportar los datos reales a archivo CSV descargable
-  const exportCsv = () => {
-    const headers = [
-      'ID Oficina',
-      'Nombre Oficina',
-      'Ciudad',
-      'Departamento',
-      'Capacidad Puestos',
-      'SLA Proyectado (%)',
-      'Tiempo Espera Promedio (min)',
-      'Clientes en Fila',
-      'Utilizacion Estimada (%)',
-      'Tiempo Ahorrado Diario (min)',
-    ];
+  useEffect(() => {
+    let active = true;
+    apiCatalogService
+      .getReportSummary(dateRange)
+      .then((res) => {
+        if (active) setSummary(res);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [dateRange]);
 
-    const rows = offices.map((o) => {
-      const m = liveMetrics.find((metric) => metric.oficinaId === o.id);
-      const sla = m ? Math.round(m.slaActual * 100) : 80;
-      const wait = m ? m.esperaPromedioMin.toFixed(1) : '6.5';
-      const queue = m ? m.clientesEnFila : 3;
-      const util = m ? m.capacidadUtilizada : 75;
-
-      return [
-        o.id,
-        `"${o.nombre}"`,
-        `"${o.ciudad}"`,
-        `"${o.departamento}"`,
-        o.capacidadPuestos,
-        sla,
-        wait,
-        queue,
-        util,
-        6, // ~6 min ahorrados por sede (82 min en total)
-      ].join(',');
-    });
-
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Reporte_Turnos_Surtigas_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
+  const exportCsv = async () => {
+    const filename = `Reporte_Turnos_Surtigas_${new Date().toISOString().slice(0, 10)}.csv`;
+    await apiDownload('/reports/export?format=csv', filename);
     showToast('Reporte generado y descargado exitosamente en formato CSV.', 'success');
   };
 
@@ -113,7 +79,7 @@ export const ReportsPage: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
           title="Nivel de Servicio de Red"
-          value="83.4%"
+          value={`${summary?.slaRedPct ?? 83.4}%`}
           subtitle="Meta CREG: &ge;80% en &le;10 min"
           icon={CheckCircle2}
           iconBgColor="bg-emerald-50"
@@ -126,20 +92,20 @@ export const ReportsPage: React.FC = () => {
 
         <KpiCard
           title="Tiempo Medio de Espera"
-          value="6.8 min"
-          subtitle="Mejora de 2.4 min vs Excel"
+          value={`${summary?.esperaMediaMin ?? 6.8} min`}
+          subtitle="Mejora frente a gestión manual"
           icon={Clock}
           iconBgColor="bg-blue-50"
           iconColor="text-blue-700"
           trend="bajando"
-          trendText="-26% tiempo de cola"
+          trendText={`Abandono: ${summary?.tasaAbandonoPct ?? 7.0}%`}
           isPositive={true}
           whyExplanation="Tiempo medio de espera de usuarios en sala Digiturno antes de ser llamados a ventanilla."
         />
 
         <KpiCard
           title="Utilización del Personal"
-          value="78.2%"
+          value={`${summary?.utilizacionPct ?? 78.2}%`}
           subtitle="Rango óptimo (75% - 85%)"
           icon={Users}
           iconBgColor="bg-indigo-50"
@@ -152,8 +118,8 @@ export const ReportsPage: React.FC = () => {
 
         <KpiCard
           title="Tiempo de Gestión Ahorrado"
-          value="82 min/día"
-          subtitle="32.8 horas/mes ahorradas"
+          value={`${summary?.tiempoAhorradoMinDia ?? 82} min/día`}
+          subtitle={`${summary?.horasMesAhorradas ?? 30.1} horas/mes ahorradas`}
           icon={Zap}
           iconBgColor="bg-orange-50"
           iconColor="text-orange-600"
