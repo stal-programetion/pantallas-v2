@@ -29,6 +29,20 @@ dist-ssr/
 .env.*
 !.env.example
 
+# Datos sensibles y artefactos backend/E2E
+*.xlsx
+*.xls
+data/*.xlsx
+data/*.xls
+backend/.venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+backend/*.db
+e2e/screenshots/
+playwright-report/
+test-results/
+
 # Tarballs / large binary backups
 *.tar
 *.tar.gz

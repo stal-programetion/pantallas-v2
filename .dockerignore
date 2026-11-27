@@ -1,5 +1,11 @@
 node_modules
 dist
+backend
+data
+docs
+e2e
+.env
+.env.*
 .git
 .gitignore
 .dockerignore
